@@ -81,6 +81,8 @@ def _apply_migration_if_needed(conn):
             cursor.execute("ALTER TABLE pages ADD COLUMN tipo TEXT NOT NULL DEFAULT 'memory'")
         if not _table_has_column(conn, "pages", "titulo"):
             cursor.execute("ALTER TABLE pages ADD COLUMN titulo TEXT")
+        if not _table_has_column(conn, "pages", "corpo"):
+            cursor.execute("ALTER TABLE pages ADD COLUMN corpo TEXT NOT NULL DEFAULT ''")
         if not _table_has_column(conn, "pages", "updated_at"):
             cursor.execute("ALTER TABLE pages ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 

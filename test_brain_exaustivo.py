@@ -2,6 +2,7 @@
 """
 Teste Exaustivo do Brain — Expert Nativo do Brain Framework
 Executa TODOS os comandos do brain.py em ambiente isolado.
+Versão corrigida: usa parse_json para lidar com headers no stdout.
 """
 
 import os
@@ -38,6 +39,23 @@ def run_brain(args, expected_rc=0):
     return result.returncode, result.stdout, result.stderr
 
 
+def parse_json_from_stdout(stdout):
+    """Extrai JSON do stdout, ignorando headers como '=== Brain: ... ==='"""
+    lines = stdout.strip().split('\n')
+    start = None
+    end = None
+    for i, l in enumerate(lines):
+        stripped = l.strip()
+        if stripped.startswith('{'):
+            start = i
+        if start is not None and stripped.endswith('}'):
+            end = i
+            break
+    if start is not None and end is not None:
+        return json.loads('\n'.join(lines[start:end+1]))
+    return None
+
+
 def check(name, condition, detail=""):
     """Verifica uma condição e registra o resultado"""
     global tests_passed, tests_failed, tests_total
@@ -59,25 +77,24 @@ def check(name, condition, detail=""):
 def check_json(args, name, expected_key=None, expected_value=None, expected_rc=0):
     """Verifica que a saída é JSON válido e contém as chaves esperadas"""
     rc, stdout, stderr = run_brain(args, expected_rc)
-    try:
-        data = json.loads(stdout)
-        if expected_key:
-            if expected_key in data:
-                if expected_value is None or data[expected_key] == expected_value:
-                    check(name, True, f"chave '{expected_key}' presente")
-                    return True
-                else:
-                    check(name, False, f"chave '{expected_key}' = {data[expected_key]}, esperado {expected_value}")
-                    return False
+    data = parse_json_from_stdout(stdout)
+    if data is None:
+        check(name, False, "não encontrou JSON no stdout")
+        return False
+    if expected_key:
+        if expected_key in data:
+            if expected_value is None or data[expected_key] == expected_value:
+                check(name, True, f"chave '{expected_key}' presente")
+                return True
             else:
-                check(name, False, f"chave '{expected_key}' NÃO encontrada")
+                check(name, False, f"chave '{expected_key}' = {data[expected_key]}, esperado {expected_value}")
                 return False
         else:
-            check(name, True, "JSON válido")
-            return True
-    except json.JSONDecodeError as e:
-        check(name, False, f"não é JSON: {e}")
-        return False
+            check(name, False, f"chave '{expected_key}' NÃO encontrada. Chaves: {list(data.keys())}")
+            return False
+    else:
+        check(name, True, "JSON válido")
+        return True
 
 
 # ============================================================
@@ -139,18 +156,21 @@ rc, stdout, stderr = run_brain([
     "--limit", "5"
 ])
 check("brain recall retorna 0", rc == 0)
-try:
-    data = json.loads(stdout)
+data = parse_json_from_stdout(stdout)
+if data:
     check("brain recall retorna lista", isinstance(data, list))
-    check("brain recall tem resultados", len(data) >= 2, f"{len(data)} resultados")
-    if len(data) > 0:
-        check("brain recall inclui 'id'", "id" in data[0])
-        check("brain recall inclui 'expert'", "expert" in data[0])
-        check("brain recall inclui 'tipo'", "tipo" in data[0])
-        check("brain recall inclui 'titulo'", "titulo" in data[0])
-        check("brain recall inclui 'corpo'", "corpo" in data[0])
-        check("brain recall inclui 'hash_canonical'", "hash_canonical" in data[0])
-except json.JSONDecodeError:
+    if isinstance(data, list):
+        check("brain recall tem resultados", len(data) >= 2, f"{len(data)} resultados")
+        if len(data) > 0:
+            check("brain recall inclui 'id'", "id" in data[0])
+            check("brain recall inclui 'expert'", "expert" in data[0])
+            check("brain recall inclui 'tipo'", "tipo" in data[0])
+            check("brain recall inclui 'titulo'", "titulo" in data[0])
+            check("brain recall inclui 'corpo'", "corpo" in data[0])
+            check("brain recall inclui 'hash_canonical'", "hash_canonical" in data[0])
+    else:
+        check("brain recall retorna algo", False, f"tipo inesperado: {type(data)}")
+else:
     check("brain recall retorna JSON", False, "stdout não é JSON")
 
 # --- 5. brain recall com search ---
@@ -161,10 +181,10 @@ rc, stdout, stderr = run_brain([
     "--search", "remember"
 ])
 check("brain recall --search retorna 0", rc == 0)
-try:
-    data = json.loads(stdout)
+data = parse_json_from_stdout(stdout)
+if data and isinstance(data, list):
     check("brain recall --search encontra resultados", len(data) >= 1, f"{len(data)} resultados para 'remember'")
-except:
+else:
     check("brain recall --search funciona", False)
 
 # --- 6. brain forget dry-run ---
@@ -175,11 +195,11 @@ rc, stdout, stderr = run_brain([
     "--id", "1", "--dry-run"
 ])
 check("brain forget --dry-run retorna 0", rc == 0)
-try:
-    data = json.loads(stdout)
+data = parse_json_from_stdout(stdout)
+if data:
     check("brain forget --dry-run tem 'would_delete'", data.get("would_delete") is True)
     check("brain forget --dry-run mostra id", data.get("id") == 1)
-except:
+else:
     check("brain forget --dry-run funciona", False)
 
 # --- 7. brain forget (execução) ---
@@ -190,10 +210,10 @@ rc, stdout, stderr = run_brain([
     "--id", "1"
 ])
 check("brain forget retorna 0", rc == 0)
-try:
-    data = json.loads(stdout)
+data = parse_json_from_stdout(stdout)
+if data:
     check("brain forget deletou", data.get("deleted") is True)
-except:
+else:
     check("brain forget funciona", False)
 
 # Verifica que a página 1 foi removida
@@ -202,11 +222,11 @@ rc, stdout, stderr = run_brain([
     "--brain-path", init_db,
     "--limit", "10"
 ])
-try:
-    data = json.loads(stdout)
+data = parse_json_from_stdout(stdout)
+if data and isinstance(data, list):
     ids_restantes = [p.get("id") for p in data]
     check("brain forget removeu a página", 1 not in ids_restantes, f"ids restantes: {ids_restantes}")
-except:
+else:
     check("verificar remoção", False)
 
 # --- 8. brain synthesize ---
@@ -216,12 +236,12 @@ rc, stdout, stderr = run_brain([
     "--brain-path", init_db
 ])
 check("brain synthesize retorna 0", rc == 0)
-try:
-    data = json.loads(stdout)
+data = parse_json_from_stdout(stdout)
+if data:
     check("brain synthesize tem 'synthesis'", "synthesis" in data)
     check("brain synthesize tem 'pages_count'", "pages_count" in data)
     check("brain synthesize tem 'by_type'", "by_type" in data)
-except:
+else:
     check("brain synthesize funciona", False)
 
 # --- 9. brain consolidate dry-run ---
@@ -247,12 +267,12 @@ rc, stdout, stderr = run_brain([
     "--dry-run"
 ])
 check("brain consolidate --dry-run retorna 0", rc == 0)
-try:
-    data = json.loads(stdout)
+data = parse_json_from_stdout(stdout)
+if data:
     check("brain consolidate --dry-run tem 'duplicates_found'", data.get("duplicates_found", 0) >= 1,
           f"duplicatas encontradas: {data.get('duplicates_found', 0)}")
     check("brain consolidate --dry-run mostra 'would_remove'", data.get("would_remove", 0) >= 1)
-except:
+else:
     check("brain consolidate --dry-run funciona", False)
 
 # --- 10. brain consolidate (execução) ---
@@ -262,23 +282,24 @@ rc, stdout, stderr = run_brain([
     "--brain-path", init_db
 ])
 check("brain consolidate retorna 0", rc == 0)
-try:
-    data = json.loads(stdout)
+data = parse_json_from_stdout(stdout)
+if data:
     check("brain consolidate removeu duplicatas", data.get("removed_count", 0) >= 1,
           f"removido: {data.get('removed_count', 0)}")
-except:
+else:
     check("brain consolidate funciona", False)
 
-# Verifica que sobrou 1 entrada com esse conteúdo
+# Verifica que sobrou 1 entrada com esse conteúdo (busca por 'consolidate' no corpo)
 rc, stdout, stderr = run_brain([
     "recall", "--expert", "teste-init",
     "--brain-path", init_db,
-    "--search", "Consolidar"
+    "--search", "consolidar"
 ])
-try:
-    data = json.loads(stdout)
-    check("brain consolidate: 1 entrada sobrou", len(data) == 1, f"restam {len(data)} entradas")
-except:
+data = parse_json_from_stdout(stdout)
+if data and isinstance(data, list):
+    check("brain consolidate: 1 entrada sobrou (busca por 'consolidar')", len(data) == 1,
+          f"restam {len(data)} entradas")
+else:
     check("verificar consolidate", False)
 
 # --- 11. brain learn (arquivo) ---
@@ -293,12 +314,12 @@ rc, stdout, stderr = run_brain([
     "--path", test_file, "--sync"
 ])
 check("brain learn + sync retorna 0", rc == 0)
-try:
-    data = json.loads(stdout)
+data = parse_json_from_stdout(stdout)
+if data:
     check("brain learn tem 'action' = learn", data.get("action") == "learn")
     check("brain learn tem 'sync'", "sync" in data)
     check("brain learn sync tem 'status' = synced", data.get("sync", {}).get("status") == "synced")
-except:
+else:
     check("brain learn funciona", False)
 
 # Verifica que o conteúdo sincronizado aparece no recall
@@ -307,11 +328,11 @@ rc, stdout, stderr = run_brain([
     "--brain-path", init_db,
     "--search", "learn"
 ])
-try:
-    data = json.loads(stdout)
+data = parse_json_from_stdout(stdout)
+if data and isinstance(data, list):
     check("brain learn+sync: conteúdo aparece no recall", len(data) >= 1,
           f"{len(data)} resultados para 'learn'")
-except:
+else:
     check("verificar learn+sync", False)
 
 # --- 12. brain learn (dry-run) ---
@@ -322,11 +343,11 @@ rc, stdout, stderr = run_brain([
     "--path", test_file, "--dry-run"
 ])
 check("brain learn --dry-run retorna 0", rc == 0)
-try:
-    data = json.loads(stdout)
+data = parse_json_from_stdout(stdout)
+if data:
     check("brain learn --dry-run tem 'would_add_to_staging'", data.get("would_add_to_staging") is True)
     check("brain learn --dry-run mostra 'hash'", "hash" in data)
-except:
+else:
     check("brain learn --dry-run funciona", False)
 
 # --- 13. brain check ---
@@ -336,8 +357,8 @@ rc, stdout, stderr = run_brain([
     "--brain-path", init_db
 ])
 check("brain check retorna 0", rc == 0)
-try:
-    data = json.loads(stdout)
+data = parse_json_from_stdout(stdout)
+if data:
     check("brain check tem 'integrity'", "integrity" in data)
     check("brain check 'integrity' = ok", data.get("integrity") == "ok")
     check("brain check tem 'schema_version'", "schema_version" in data)
@@ -345,7 +366,7 @@ try:
     check("brain check tem 'counts'", "counts" in data)
     check("brain check 'schema_version_actual' = 1.0.0", data.get("schema_version_actual") == "1.0.0")
     check("brain check 'issues' = [] (sem problemas)", data.get("issues", []) == [])
-except:
+else:
     check("brain check funciona", False)
 
 # --- 14. brain jobs ---
@@ -355,10 +376,10 @@ rc, stdout, stderr = run_brain([
     "--brain-path", init_db
 ])
 check("brain jobs retorna 0", rc == 0)
-try:
-    data = json.loads(stdout)
+data = parse_json_from_stdout(stdout)
+if data:
     check("brain jobs retorna lista", isinstance(data, list))
-except:
+else:
     check("brain jobs funciona", False)
 
 # --- 15. brain taxonomist ---
@@ -368,11 +389,11 @@ rc, stdout, stderr = run_brain([
     "--brain-path", init_db
 ])
 check("brain taxonomist retorna 0", rc == 0)
-try:
-    data = json.loads(stdout)
+data = parse_json_from_stdout(stdout)
+if data:
     check("brain taxonomist tem 'tipo_distribution'", "tipo_distribution" in data)
     check("brain taxonomist tem 'suggestions'", "suggestions" in data)
-except:
+else:
     check("brain taxonomist funciona", False)
 
 # --- 16. brain capture ---
@@ -384,10 +405,10 @@ rc, stdout, stderr = run_brain([
     "--content", "Procedimento capturado pela taxonomia"
 ])
 check("brain capture retorna 0", rc == 0)
-try:
-    data = json.loads(stdout)
+data = parse_json_from_stdout(stdout)
+if data:
     check("brain capture tem 'action' = remember", data.get("action") == "remember")
-except:
+else:
     check("brain capture funciona", False)
 
 # --- 17. Migração de schema antigo ---
@@ -465,11 +486,11 @@ rc, stdout, stderr = run_brain([
 check("brain global learn --content retorna 0", rc == 0)
 check("global brain.db foi criado", os.path.exists(global_db))
 
-try:
-    data = json.loads(stdout)
+data = parse_json_from_stdout(stdout)
+if data:
     check("brain global learn tem 'action' = remember", data.get("action") == "remember")
     check("brain global learn tem 'expert' = global", data.get("expert") == "global")
-except:
+else:
     check("brain global learn funciona", False)
 
 # --- 21. brain global learn --path ---
@@ -482,11 +503,11 @@ rc, stdout, stderr = run_brain([
     "global", "learn", "--path", global_test_file, "--sync"
 ])
 check("brain global learn --path --sync retorna 0", rc == 0)
-try:
-    data = json.loads(stdout)
+data = parse_json_from_stdout(stdout)
+if data:
     check("brain global learn --path tem 'action' = learn", data.get("action") == "learn")
     check("brain global learn --path tem 'sync'", "sync" in data)
-except:
+else:
     check("brain global learn --path funciona", False)
 
 # --- 22. brain admin commands ---
