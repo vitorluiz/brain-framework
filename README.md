@@ -1,10 +1,29 @@
-# Brain Framework — CLI evolutive para gerenciar brains do ecossistema Granjimmy
+# Brain Framework — CLI evolutive para gerenciar brains
 
-> **Fonte da verdade:** Este repositório (vitorluiz/brain-framework).
+> **Autor:** Vitor Luiz (vitorluizmachado@gmail.com)
+> **Repositório:** https://github.com/vitorluiz/brain-framework
+> **Status:** ferramenta pública — sem dono, sem clientela específica
 
 O **Brain Framework** é uma ferramenta CLI independente — agnóstica a qualquer
 profile ou agente — que gerencia bases de conhecimento SQLite (brain.db) para
 sistemas multi-agente.
+
+É uma ferramenta pública, feita por Vitor Luiz para uso geral. Nem todos os
+usos serão multi-agente — um único agente ou até um humano pode usar — mas a
+ferramenta foi desenhada para suportar múltiplos agents quando necessário,
+com isolamento por expert.
+
+## O que é
+
+Um **brain** é uma base de conhecimento SQLite leve (brain.db) com um schema
+comum (definido em `schema_pack.yaml`). A ferramenta fornece:
+- CRUD de conhecimento (people, concepts, projects, groups, memory, inbox)
+- Classificação automática via LLM (taxonomist) com schema
+- Aprendizado a partir de logs (learn) com anonimização
+- Deduplicação determinística (consolidate, Jaccard + tiering)
+- Visibilidade (check, schema_version, migrate)
+- Backup/restore granular (global separado dos experts)
+- Inicialização de novos brains para novos agents ou novos projetos
 
 ## Instalação
 
@@ -76,6 +95,11 @@ brain_tool migrate       — aplica migrações pendentes do schema_version
     └── expert_<profile>/
         └── brain_YYYYMMDD_HHMMSS.db
 ```
+
+A estrutura acima é um exemplo de como um sistema multi-agente pode organizar
+seus brains — não é obrigatório. Você pode usar qualquer estrutura de diretórios
+que fizer sentido, desde que cada brain.db esteja em seu próprio diretório com
+seu próprio schema_pack.yaml.
 
 ## Schema compartilhado
 
@@ -205,10 +229,25 @@ python3 -m brain_tool --global forget --id 5 --dry-run
 python3 -m brain_tool --global consolidate --dry-run
 ```
 
-## Links relacionados
+## Como contribuir
 
-- **CONTRATO_AGENTES.md** — Contrato de comportamento do ecossistema
-  (`~/Projetos/gtic/CONTRATO_AGENTES.md`)
-- **ARQUITETURA.md** — Mapa mestre do ecossistema (`~/Projetos/gtic/ARQUITETURA.md`)
-- **brain_tool.py** — Ferramenta de instrução do brain
-  (`~/Projetos/gtic/jimmy/brain.py`)
+Pull requests e issues são bem-vindos. A ferramenta é pública — qualquer
+melhoria é bem-vinda.
+
+### Fluxo de desenvolvimento
+
+1. Fork ou clone do repo
+2. Crie um branch (`feature/algo`, `fix/algo`, `docs/algo`)
+3. Commit com mensagem clara (convenção Conventional Commits)
+4. Testar localmente (basta rodar o comando com um brain.db de teste)
+5. Abra um PR
+
+### Versões
+
+A versão da ferramenta segue semver:
+- `MAJOR` — mudança incompatível com brains antigos (ex: mudança no schema)
+- `MINOR` — funcionalidade nova compatível (ex: novo comando)
+- `PATCH` — correção de bug sem mudança de funcionalidade
+
+O `SCHEMA_VERSION` é independente da versão da ferramenta — reflete a versão
+do schema do brain.db.
