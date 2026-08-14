@@ -1,3 +1,5 @@
+# .gitignore — Brain Framework
+
 # Python
 __pycache__/
 *.py[cod]
@@ -26,21 +28,7 @@ ENV/
 env/
 .venv/
 
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
-
-# Secrets / environment
-.env
-.env.local
-*.env
-*.key
-*.pem
-
-# SQLite databases (local development only — not for version control)
+# SQLite databases (NÃO versionar — são locais de uso)
 *.db
 *.sqlite
 *.sqlite3
@@ -53,9 +41,22 @@ backups/
 *.log
 logs/
 
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
 # OS
 .DS_Store
 Thumbs.db
+
+# Secrets
+.env
+.env.local
+*.key
+*.pem
 
 # Test artifacts
 .pytest_cache/
