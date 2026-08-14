@@ -1,0 +1,63 @@
+# Template de schema para novos brains
+# Copie para o diretorio do expert e edite conforme necessidade
+
+brain:
+  version: "1.0.0"
+  expert: "<nome-do-expert>"
+  created_at: "{{ timestamp }}"
+
+tables:
+  pages:
+    columns:
+      - id: INTEGER PRIMARY KEY AUTOINCREMENT
+      - expert: TEXT NOT NULL
+      - tipo: TEXT NOT NULL
+      - titulo: TEXT
+      - corpo: TEXT NOT NULL
+      - hash_canonical: TEXT
+      - created_at: TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      - updated_at: TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+
+  knowledge_staging:
+    columns:
+      - id: INTEGER PRIMARY KEY AUTOINCREMENT
+      - expert: TEXT NOT NULL
+      - chunk_data: TEXT NOT NULL
+      - hash_canonical: TEXT NOT NULL
+      - status: TEXT DEFAULT 'pending'
+      - created_at: TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+
+  jobs:
+    columns:
+      - id: TEXT PRIMARY KEY
+      - expert: TEXT NOT NULL
+      - command: TEXT NOT NULL
+      - status: TEXT DEFAULT 'enqueued'
+      - metadata: TEXT
+      - created_at: TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+
+  schema_version:
+    columns:
+      - version: TEXT PRIMARY KEY
+      - applied_at: TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      - description: TEXT
+
+supported_file_types:
+  - .txt
+  - .md
+  - .pdf
+  - .docx
+  - .doc
+  - .xlsx
+  - .xls
+  - .csv
+
+hash_algorithm: sha256
+
+knowledge_types:
+  - memory: "Memoria de contexto, conversas, preferencias"
+  - fact: "Fato verificavel, informacao concreta"
+  - entity: "Entidade nomeada: produto, servico, pessoa, etc."
+  - procedure: "Procedimento, passo a passo, instrucao"
+  - policy: "Politica, regra, norma"
+  - system: "Informacao do sistema, inicializacao, config"
