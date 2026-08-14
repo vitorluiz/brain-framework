@@ -44,43 +44,98 @@ def initialize_schema(conn):
     cursor.execute("SELECT version FROM schema_version ORDER BY applied_at DESC LIMIT 1")
     row = cursor.fetchone()
     current_version = row[0] if row else "0.0.0"
+    
     if current_version < SCHEMA_VERSION:
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS pages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                expert TEXT NOT NULL,
-                tipo TEXT NOT NULL,
-                titulo TEXT,
-                corpo TEXT NOT NULL,
-                hash_canonical TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS knowledge_staging (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                expert TEXT NOT NULL,
-                chunk_data TEXT NOT NULL,
-                hash_canonical TEXT NOT NULL,
-                status TEXT DEFAULT 'pending',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                processed_at TIMESTAMP
-            )
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS jobs (
-                id TEXT PRIMARY KEY,
-                expert TEXT NOT NULL,
-                command TEXT NOT NULL,
-                status TEXT DEFAULT 'enqueued',
-                metadata TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                started_at TIMESTAMP,
-                completed_at TIMESTAMP,
-                error TEXT
-            )
-        """)
+        # Garante que a tabela pages tem todas as colunas necessárias
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='pages'")
+        if cursor.fetchone():
+            # Tabela existe, verificar colunas
+            cursor.execute("PRAGMA table_info(pages)")
+            columns = [row[1] for row in cursor.fetchall()]
+            if "expert" not in columns:
+                cursor.execute("ALTER TABLE pages ADD COLUMN expert TEXT NOT NULL DEFAULT 'unknown'")
+            if "hash_canonical" not in columns:
+                cursor.execute("ALTER TABLE pages ADD COLUMN hash_canonical TEXT")
+            if "created_at" not in columns:
+                cursor.execute("ALTER TABLE pages ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+            if "updated_at" not in columns:
+                cursor.execute("ALTER TABLE pages ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+            if "tipo" not in columns:
+                cursor.execute("ALTER TABLE pages ADD COLUMN tipo TEXT NOT NULL DEFAULT 'memory'")
+            if "titulo" not in columns:
+                cursor.execute("ALTER TABLE pages ADD COLUMN titulo TEXT")
+        else:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS pages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    expert TEXT NOT NULL,
+                    tipo TEXT NOT NULL,
+                    titulo TEXT,
+                    corpo TEXT NOT NULL,
+                    hash_canonical TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+        
+        # knowledge_staging
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='knowledge_staging'")
+        if cursor.fetchone():
+            cursor.execute("PRAGMA table_info(knowledge_staging)")
+            columns = [row[1] for row in cursor.fetchall()]
+            if "expert" not in columns:
+                cursor.execute("ALTER TABLE knowledge_staging ADD COLUMN expert TEXT NOT NULL DEFAULT 'unknown'")
+            if "hash_canonical" not in columns:
+                cursor.execute("ALTER TABLE knowledge_staging ADD COLUMN hash_canonical TEXT")
+            if "status" not in columns:
+                cursor.execute("ALTER TABLE knowledge_staging ADD COLUMN status TEXT DEFAULT 'pending'")
+            if "chunk_data" not in columns:
+                cursor.execute("ALTER TABLE knowledge_staging ADD COLUMN chunk_data TEXT NOT NULL")
+            if "created_at" not in columns:
+                cursor.execute("ALTER TABLE knowledge_staging ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        else:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS knowledge_staging (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    expert TEXT NOT NULL,
+                    chunk_data TEXT NOT NULL,
+                    hash_canonical TEXT NOT NULL,
+                    status TEXT DEFAULT 'pending',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    processed_at TIMESTAMP
+                )
+            """)
+        
+        # jobs
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='jobs'")
+        if cursor.fetchone():
+            cursor.execute("PRAGMA table_info(jobs)")
+            columns = [row[1] for row in cursor.fetchall()]
+            if "expert" not in columns:
+                cursor.execute("ALTER TABLE jobs ADD COLUMN expert TEXT NOT NULL DEFAULT 'unknown'")
+            if "status" not in columns:
+                cursor.execute("ALTER TABLE jobs ADD COLUMN status TEXT DEFAULT 'enqueued'")
+            if "command" not in columns:
+                cursor.execute("ALTER TABLE jobs ADD COLUMN command TEXT NOT NULL")
+            if "metadata" not in columns:
+                cursor.execute("ALTER TABLE jobs ADD COLUMN metadata TEXT")
+            if "created_at" not in columns:
+                cursor.execute("ALTER TABLE jobs ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        else:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS jobs (
+                    id TEXT PRIMARY KEY,
+                    expert TEXT NOT NULL,
+                    command TEXT NOT NULL,
+                    status TEXT DEFAULT 'enqueued',
+                    metadata TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    started_at TIMESTAMP,
+                    completed_at TIMESTAMP,
+                    error TEXT
+                )
+            """)
+        
         cursor.execute("INSERT INTO schema_version (version, description) VALUES (?, ?)",
                        (SCHEMA_VERSION, f"Migration for {SCHEMA_VERSION}"))
         conn.commit()

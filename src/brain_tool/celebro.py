@@ -17,33 +17,30 @@ import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# Importa apenas o que precisa do brain_tool
-def _import_brain_tool():
-    try:
-        from brain_tool import (
-            get_brain_db_path, get_db_connection, remember, learn, sync,
-            SCHEMA_VERSION
-        )
-        return True
-    except ImportError as e:
-        print(f"AVISO: brain_tool nao importavel: {e}", file=sys.stderr)
-        print("Alguns comandos podem nao funcionar corretamente.", file=sys.stderr)
-        return False
+# Tenta importar brain_tool; se não conseguir, define fallback
+try:
+    from brain_tool import (
+        get_brain_db_path, get_db_connection, remember, learn, sync,
+        SCHEMA_VERSION
+    )
+    _BRAIN_TOOL_AVAILABLE = True
+except ImportError as e:
+    print(f"AVISO: brain_tool nao importavel: {e}", file=sys.stderr)
+    print("Alguns comandos podem nao funcionar corretamente.", file=sys.stderr)
+    _BRAIN_TOOL_AVAILABLE = False
 
-_BRAIN_TOOL_AVAILABLE = _import_brain_tool()
-
-# Se brain_tool nao esta disponivel, definimos fallback minimo
+# Fallback minimo se brain_tool nao disponivel
 if not _BRAIN_TOOL_AVAILABLE:
     def get_brain_db_path(expert=None, brain_path=None, global_brain=False):
-        DEFAULT_BRAIN_ROOT = os.environ.get('BRAIN_ROOT', os.path.expanduser("~/.hermes/brain"))
-        GLOBAL_DIR = os.path.join(DEFAULT_BRAIN_ROOT, "global")
-        EXPERTS_DIR = os.path.join(DEFAULT_BRAIN_ROOT, "experts")
+        _DEFAULT_BRAIN_ROOT = os.environ.get('BRAIN_ROOT', os.path.expanduser("~/.hermes/brain"))
+        _GLOBAL_DIR = os.path.join(_DEFAULT_BRAIN_ROOT, "global")
+        _EXPERTS_DIR = os.path.join(_DEFAULT_BRAIN_ROOT, "experts")
         if brain_path:
             return brain_path
         if global_brain:
-            return os.path.join(GLOBAL_DIR, "brain.db")
+            return os.path.join(_GLOBAL_DIR, "brain.db")
         if expert:
-            return os.path.join(EXPERTS_DIR, expert, "brain.db")
+            return os.path.join(_EXPERTS_DIR, expert, "brain.db")
         return os.path.join(os.getcwd(), "brain.db")
 
     def get_db_connection(db_path):
@@ -51,6 +48,90 @@ if not _BRAIN_TOOL_AVAILABLE:
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         return conn
+
+    def remember(conn, expert, tipo, titulo=None, corpo="", hash_canonical=None, dry_run=False):
+        # Fallback minimo: só cria a tabela e insere
+        import sqlite3 as _sqlite3
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                expert TEXT NOT NULL, tipo TEXT NOT NULL,
+                titulo TEXT, corpo TEXT NOT NULL,
+                hash_canonical TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        if not hash_canonical:
+            import hashlib
+            hash_canonical = hashlib.sha256(corpo.encode('utf-8')).hexdigest()
+        cursor.execute("""
+            INSERT INTO pages (expert, tipo, titulo, corpo, hash_canonical)
+            VALUES (?, ?, ?, ?, ?)
+        """, (expert, tipo, titulo, corpo, hash_canonical))
+        conn.commit()
+        return {"action": "remember", "id": cursor.lastrowid, "expert": expert}
+
+    def learn(conn, expert, file_path, sync_immediately=False, dry_run=False):
+        # Fallback: só cria staging com conteúdo básico
+        import hashlib
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS knowledge_staging (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                expert TEXT NOT NULL, chunk_data TEXT NOT NULL,
+                hash_canonical TEXT NOT NULL, status TEXT DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+        except:
+            content = f"Arquivo: {file_path}"
+        h = hashlib.sha256(content.encode('utf-8')).hexdigest()
+        if dry_run:
+            return {"action": "learn (dry-run)", "expert": expert, "file": file_path, "hash": h}
+        cursor.execute("""
+            INSERT INTO knowledge_staging (expert, chunk_data, hash_canonical)
+            VALUES (?, ?, ?)
+        """, (expert, content, h))
+        conn.commit()
+        return {"action": "learn", "expert": expert, "staging_id": cursor.lastrowid, "hash": h}
+
+    def sync(conn, expert, staging_id=None):
+        # Fallback: move staging para pages
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                expert TEXT NOT NULL, tipo TEXT NOT NULL,
+                titulo TEXT, corpo TEXT NOT NULL,
+                hash_canonical TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        if staging_id:
+            cursor.execute("SELECT id, chunk_data, hash_canonical FROM knowledge_staging WHERE id = ? AND expert = ?",
+                           (staging_id, expert))
+            s = cursor.fetchone()
+            if not s:
+                return {"action": "sync", "error": "staging nao encontrado"}
+            cursor.execute("SELECT id FROM pages WHERE hash_canonical = ? AND expert = ?",
+                           (s["hash_canonical"], expert))
+            if cursor.fetchone():
+                cursor.execute("DELETE FROM knowledge_staging WHERE id = ?", (staging_id,))
+                conn.commit()
+                return {"action": "sync", "status": "skipped", "reason": "hash ja existe"}
+            cursor.execute("""
+                INSERT INTO pages (expert, tipo, titulo, corpo, hash_canonical)
+                VALUES (?, 'auto_learned', ?, ?, ?)
+            """, (expert, f"Arquivo aprendido (staging #{staging_id})", s["chunk_data"], s["hash_canonical"]))
+            cursor.execute("DELETE FROM knowledge_staging WHERE id = ?", (staging_id,))
+            conn.commit()
+            return {"action": "sync", "status": "synced", "page_id": cursor.lastrowid}
+        return {"action": "sync", "status": "nothing_to_sync"}
 
 DEFAULT_BRAIN_ROOT = os.environ.get('BRAIN_ROOT', os.path.expanduser("~/.hermes/brain"))
 GLOBAL_DIR = os.path.join(DEFAULT_BRAIN_ROOT, "global")
@@ -215,13 +296,28 @@ def cmd_list_profiles(args):
         status = "+" if exists else "-"
         print(f"  {status} {name}")
         if exists:
-            conn = get_db_connection(brain_path)
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM pages WHERE expert = ?", (name,))
-            count = cursor.fetchone()[0]
-            conn.close()
-            print(f"      brain.db: {brain_path}")
-            print(f"      conhecimentos: {count}")
+            try:
+                conn = get_db_connection(brain_path)
+                cursor = conn.cursor()
+                # Verifica se a tabela pages existe e tem a coluna expert
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='pages'")
+                if cursor.fetchone():
+                    cursor.execute("PRAGMA table_info(pages)")
+                    columns = [row[1] for row in cursor.fetchall()]
+                    if "expert" in columns:
+                        cursor.execute("SELECT COUNT(*) FROM pages WHERE expert = ?", (name,))
+                        count = cursor.fetchone()[0]
+                        print(f"      brain.db: {brain_path}")
+                        print(f"      conhecimentos: {count}")
+                    else:
+                        print(f"      brain.db: {brain_path}")
+                        print(f"      schema: versão antiga (sem coluna 'expert')")
+                else:
+                    print(f"      brain.db: {brain_path} (tabela pages não encontrada)")
+                conn.close()
+            except Exception as e:
+                print(f"      brain.db: {brain_path}")
+                print(f"      erro ao ler: {e}", file=sys.stderr)
     
     return 0
 
@@ -289,17 +385,27 @@ def cmd_global_learn(args):
                                   args.content, dry_run=args.dry_run)
             else:
                 cursor = conn.cursor()
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS pages (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        expert TEXT NOT NULL,
-                        tipo TEXT NOT NULL,
-                        titulo TEXT,
-                        corpo TEXT NOT NULL,
-                        hash_canonical TEXT,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
+                # Garante que a tabela pages existe com as colunas corretas
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='pages'")
+                if not cursor.fetchone():
+                    cursor.execute("""
+                        CREATE TABLE pages (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            expert TEXT NOT NULL,
+                            tipo TEXT NOT NULL,
+                            titulo TEXT,
+                            corpo TEXT NOT NULL,
+                            hash_canonical TEXT,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                    """)
+                else:
+                    cursor.execute("PRAGMA table_info(pages)")
+                    cols = [row[1] for row in cursor.fetchall()]
+                    if "expert" not in cols:
+                        cursor.execute("ALTER TABLE pages ADD COLUMN expert TEXT NOT NULL DEFAULT 'unknown'")
+                    if "hash_canonical" not in cols:
+                        cursor.execute("ALTER TABLE pages ADD COLUMN hash_canonical TEXT")
                 cursor.execute("""
                     INSERT INTO pages (expert, tipo, titulo, corpo, hash_canonical)
                     VALUES (?, 'global_policy', ?, ?, ?)
