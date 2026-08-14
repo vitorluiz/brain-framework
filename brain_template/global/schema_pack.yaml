@@ -1,0 +1,20 @@
+# Schema pack do brain global — informacoes compartilhadas por todos os agents
+page_types:
+  - name: people
+    primitive: entity
+    description: Membros da equipe, admins, contatos (NAO pacientes reais)
+  - name: concepts
+    primitive: concept
+    description: Conceitos/protocolos/regras compartilhados entre agents
+  - name: projects
+    primitive: concept
+    description: Projetos do ecossistema (não específicos de um agente)
+  - name: groups
+    primitive: entity
+    description: Equipes/groups do ecossistema
+  - name: memory
+    primitive: annotation
+    description: Sinteses e memorias relacionais globais
+  - name: inbox
+    primitive: annotation
+    description: Triagem temporaria
