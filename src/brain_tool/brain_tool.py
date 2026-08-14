@@ -33,7 +33,6 @@ def get_brain_db_path(expert=None, brain_path=None, global_brain=False):
 
 
 def _table_has_column(conn, table_name, column_name):
-    """Verifica se uma tabela tem uma coluna específica."""
     cursor = conn.cursor()
     cursor.execute(f"PRAGMA table_info({table_name})")
     for row in cursor.fetchall():
@@ -43,17 +42,23 @@ def _table_has_column(conn, table_name, column_name):
 
 
 def _apply_migration_if_needed(conn):
-    """
-    Garante que todas as tabelas e colunas necessárias existam.
-    Diferente de apenas verificar schema_version, isso inspeciona
-    a estrutura real das tabelas e adiciona colunas faltando.
-    """
     cursor = conn.cursor()
-    
-    # Tabela pages — verificar colunas essenciais
+
+    # Tabela schema_version
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'")
+    if cursor.fetchone() is None:
+        cursor.execute("""
+            CREATE TABLE schema_version (
+                version TEXT PRIMARY KEY,
+                applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                description TEXT
+            )
+        """)
+
+    # Tabela pages
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='pages'")
     pages_exists = cursor.fetchone() is not None
-    
+
     if not pages_exists:
         cursor.execute("""
             CREATE TABLE pages (
@@ -68,7 +73,6 @@ def _apply_migration_if_needed(conn):
             )
         """)
     else:
-        # Adicionar colunas que faltam
         if not _table_has_column(conn, "pages", "expert"):
             cursor.execute("ALTER TABLE pages ADD COLUMN expert TEXT NOT NULL DEFAULT 'unknown'")
         if not _table_has_column(conn, "pages", "hash_canonical"):
@@ -79,13 +83,11 @@ def _apply_migration_if_needed(conn):
             cursor.execute("ALTER TABLE pages ADD COLUMN titulo TEXT")
         if not _table_has_column(conn, "pages", "updated_at"):
             cursor.execute("ALTER TABLE pages ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
-        # Remover colunas do schema antigo que nao existem mais
-        # (entidade, version, status — sao obsoletos)
-    
+
     # Tabela knowledge_staging
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='knowledge_staging'")
     staging_exists = cursor.fetchone() is not None
-    
+
     if not staging_exists:
         cursor.execute("""
             CREATE TABLE knowledge_staging (
@@ -109,11 +111,11 @@ def _apply_migration_if_needed(conn):
             cursor.execute("ALTER TABLE knowledge_staging ADD COLUMN chunk_data TEXT NOT NULL")
         if not _table_has_column(conn, "knowledge_staging", "created_at"):
             cursor.execute("ALTER TABLE knowledge_staging ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
-    
+
     # Tabela jobs
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='jobs'")
     jobs_exists = cursor.fetchone() is not None
-    
+
     if not jobs_exists:
         cursor.execute("""
             CREATE TABLE jobs (
@@ -139,12 +141,11 @@ def _apply_migration_if_needed(conn):
             cursor.execute("ALTER TABLE jobs ADD COLUMN metadata TEXT")
         if not _table_has_column(conn, "jobs", "created_at"):
             cursor.execute("ALTER TABLE jobs ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
-    
-    # Atualiza schema_version
+
+    # Schema version
     cursor.execute("SELECT version FROM schema_version ORDER BY applied_at DESC LIMIT 1")
     row = cursor.fetchone()
     current_version = row[0] if row else "0.0.0"
-    
     if current_version < SCHEMA_VERSION:
         cursor.execute("""
             INSERT INTO schema_version (version, description)
@@ -154,14 +155,18 @@ def _apply_migration_if_needed(conn):
 
 
 def initialize_schema(conn):
-    """Inicializa o schema do brain.db — garante tabelas e colunas."""
+    """Inicializa o schema do brain.db."""
     _apply_migration_if_needed(conn)
 
 
 def get_db_connection(db_path):
+    """Abre conexão com o brain.db, criando diretório e schema se necessário."""
+    db_dir = os.path.dirname(db_path)
+    if db_dir and not os.path.exists(db_dir):
+        os.makedirs(db_dir, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
-    initialize_schema(conn)
+    _apply_migration_if_needed(conn)
     return conn
 
 
@@ -641,13 +646,11 @@ Targeting:
         """)
     sp = parser.add_subparsers(dest='command')
 
-    # Init
     p_init = sp.add_parser('init', help='Inicializa brain.db')
     p_init.add_argument('--name', required=True)
     p_init.add_argument('--brain-path', help='Caminho explicito para brain.db')
     p_init.add_argument('--global', action='store_true', dest='global_brain')
 
-    # Remember
     p_rem = sp.add_parser('remember', help='Adiciona conhecimento')
     p_rem.add_argument('--expert', required=True)
     p_rem.add_argument('--tipo', required=True)
@@ -657,7 +660,6 @@ Targeting:
     p_rem.add_argument('--global', action='store_true', dest='global_brain')
     p_rem.add_argument('--dry-run', action='store_true')
 
-    # Recall
     p_rec = sp.add_parser('recall', help='Recupera conhecimento')
     p_rec.add_argument('--expert', required=True)
     p_rec.add_argument('--search')
@@ -666,7 +668,6 @@ Targeting:
     p_rec.add_argument('--brain-path', help='Caminho explicito para brain.db')
     p_rec.add_argument('--global', action='store_true', dest='global_brain')
 
-    # Forget
     p_for = sp.add_parser('forget', help='Remove conhecimento')
     p_for.add_argument('--expert', required=True)
     p_for.add_argument('--id', type=int, required=True)
@@ -674,14 +675,12 @@ Targeting:
     p_for.add_argument('--global', action='store_true', dest='global_brain')
     p_for.add_argument('--dry-run', action='store_true')
 
-    # Synthesize
     p_syn = sp.add_parser('synthesize', help='Gera sintese')
     p_syn.add_argument('--expert', required=True)
     p_syn.add_argument('--type', default='summary')
     p_syn.add_argument('--brain-path', help='Caminho explicito para brain.db')
     p_syn.add_argument('--global', action='store_true', dest='global_brain')
 
-    # Consolidate
     p_con = sp.add_parser('consolidate', help='Duplica conhecimento')
     p_con.add_argument('--expert', required=True)
     p_con.add_argument('--threshold', type=float, default=0.8)
@@ -689,7 +688,6 @@ Targeting:
     p_con.add_argument('--global', action='store_true', dest='global_brain')
     p_con.add_argument('--dry-run', action='store_true')
 
-    # Learn
     p_learn = sp.add_parser('learn', help='Processa arquivo/diretorio')
     p_learn.add_argument('--expert', required=True)
     p_learn.add_argument('--path', required=True)
@@ -698,19 +696,16 @@ Targeting:
     p_learn.add_argument('--global', action='store_true', dest='global_brain')
     p_learn.add_argument('--dry-run', action='store_true')
 
-    # Sync
     p_sync = sp.add_parser('sync', help='Sync staging para principal')
     p_sync.add_argument('--expert', required=True)
     p_sync.add_argument('--brain-path', help='Caminho explicito para brain.db')
     p_sync.add_argument('--global', action='store_true', dest='global_brain')
 
-    # Check
     p_chk = sp.add_parser('check', help='Verifica integridade')
     p_chk.add_argument('--expert', required=True)
     p_chk.add_argument('--brain-path', help='Caminho explicito para brain.db')
     p_chk.add_argument('--global', action='store_true', dest='global_brain')
 
-    # Jobs
     p_job = sp.add_parser('jobs', help='Lista jobs')
     p_job.add_argument('--expert', required=True)
     p_job.add_argument('--status')
@@ -718,14 +713,12 @@ Targeting:
     p_job.add_argument('--brain-path', help='Caminho explicito para brain.db')
     p_job.add_argument('--global', action='store_true', dest='global_brain')
 
-    # Taxonomist
     p_tax = sp.add_parser('taxonomist', help='Sugeri taxonomia')
     p_tax.add_argument('--expert', required=True)
     p_tax.add_argument('--limit', type=int, default=10)
     p_tax.add_argument('--brain-path', help='Caminho explicito para brain.db')
     p_tax.add_argument('--global', action='store_true', dest='global_brain')
 
-    # Capture
     p_cap = sp.add_parser('capture', help='Captura taxonomia')
     p_cap.add_argument('--expert', required=True)
     p_cap.add_argument('--type', required=True)
