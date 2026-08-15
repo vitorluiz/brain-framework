@@ -19,7 +19,6 @@ SCHEMA_VERSION = "1.0.0"
 
 DEFAULT_BRAIN_ROOT = os.environ.get('BRAIN_ROOT', os.path.expanduser("~/.hermes/brain"))
 GLOBAL_DIR = os.path.join(DEFAULT_BRAIN_ROOT, "global")
-EXPERTS_DIR = os.path.join(DEFAULT_BRAIN_ROOT, "experts")
 
 
 def get_brain_db_path(expert=None, brain_path=None, global_brain=False):
@@ -28,7 +27,7 @@ def get_brain_db_path(expert=None, brain_path=None, global_brain=False):
     if global_brain:
         return os.path.join(GLOBAL_DIR, "brain.db")
     if expert:
-        return os.path.join(EXPERTS_DIR, expert, "brain.db")
+        return os.path.join(DEFAULT_BRAIN_ROOT, expert, "brain.db")
     return os.path.join(os.getcwd(), "brain.db")
 
 

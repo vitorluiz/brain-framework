@@ -71,13 +71,12 @@ if not BRAIN_TOOL_AVAILABLE:
         DEFAULT_BRAIN_ROOT = os.environ.get('BRAIN_ROOT',
             os.path.expanduser("~/.hermes/brain"))
         GLOBAL_DIR = os.path.join(DEFAULT_BRAIN_ROOT, "global")
-        EXPERTS_DIR = os.path.join(DEFAULT_BRAIN_ROOT, "experts")
         if brain_path:
             return brain_path
         if global_brain:
             return os.path.join(GLOBAL_DIR, "brain.db")
         if expert:
-            return os.path.join(EXPERTS_DIR, expert, "brain.db")
+            return os.path.join(DEFAULT_BRAIN_ROOT, expert, "brain.db")
         return os.path.join(os.getcwd(), "brain.db")
 
     def get_db_connection(db_path):
@@ -426,7 +425,6 @@ if not BRAIN_TOOL_AVAILABLE:
 DEFAULT_BRAIN_ROOT = os.environ.get('BRAIN_ROOT',
     os.path.expanduser("~/.hermes/brain"))
 GLOBAL_DIR = os.path.join(DEFAULT_BRAIN_ROOT, "global")
-EXPERTS_DIR = os.path.join(DEFAULT_BRAIN_ROOT, "experts")
 BACKUPS_DIR = os.path.join(DEFAULT_BRAIN_ROOT, "backups")
 ADMIN_CONFIG_FILE = os.path.join(DEFAULT_BRAIN_ROOT, "admins.json")
 
@@ -451,9 +449,9 @@ def save_admins(admins: Dict[str, Any]) -> None:
 
 
 def get_expert_names() -> List[str]:
-    if not os.path.exists(EXPERTS_DIR):
+    if not os.path.exists(DEFAULT_BRAIN_ROOT):
         return []
-    return sorted([d.name for d in os.scandir(EXPERTS_DIR) if d.is_dir()])
+    return sorted([d.name for d in os.scandir(DEFAULT_BRAIN_ROOT) if d.is_dir() and d.name != "global" and d.name != "backups"])
 
 
 # === Comandos do Brain ===
@@ -486,11 +484,7 @@ def cmd_add_profile(args) -> int:
     except Exception as e:
         print(f"  - Erro ao criar profile Hermes: {e}", file=sys.stderr)
 
-    # 2. Cria brain.db (sempre)
-    expert_dir = os.path.join(EXPERTS_DIR, name)
-    if not os.path.exists(expert_dir):
-        os.makedirs(expert_dir, exist_ok=True)
-
+    # 2. Cria brain.db (sempre) — o get_db_connection cria o diretório se needed
     brain_path = get_brain_db_path(expert=name)
     try:
         conn = get_db_connection(brain_path)
