@@ -73,15 +73,18 @@ brain recall --expert maria --search "Maria"
 ├── profiles/              # Perfis do Hermes Agent (config.yaml, SOUL.md)
 │   └── <nome>/
 └── brain/                 # Bases de conhecimento (brain.db)
-    ├── <nome>/           # Brain de cada expert
+    ├── experts/           # Brain de cada expert
+    │   └── <nome>/
+    │       └── brain.db
+    ├── global/            # Brain global (compartilhado entre experts)
     │   └── brain.db
-    └── global/           # Brain global (compartilhado)
-        └── brain.db
+    ├── admins.json        # Lista de administradores
+    └── backups/           # Backups gerados por `brain backup`
 ```
 
 O `brain add profile <nome>` cria **ambos**:
 1. Profile em `~/.hermes/profiles/<nome>/`
-2. Brain.db em `~/.hermes/brain/<nome>/brain.db`
+2. Brain.db em `~/.hermes/brain/experts/<nome>/brain.db`
 
 ---
 

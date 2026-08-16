@@ -1,20 +1,22 @@
 # Quickstart — Brain Framework
 
-> Primeiro uso do Brain Framework em 5 minutos.
-> Este guia assume que você já instalou o framework.
+> Primeiro uso em 5 minutos.
 
 ---
 
-## Instalação (se ainda não instalou)
+## Instalação
 
 ```bash
-# Instalar direto do GitHub
-pip install git+ssh://git@github.com/vitorluiz/brain-framework.git
-
-# Ou clonar e instalar localmente
 git clone git@github.com:vitorluiz/brain-framework.git
 cd brain-framework
+python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
+```
+
+Para suporte a PDF/DOCX/planilhas no `learn`:
+
+```bash
+pip install -e ".[learn]"
 ```
 
 ---
@@ -22,118 +24,55 @@ pip install -e .
 ## Verificar a instalação
 
 ```bash
-# Verificar a versão do framework
-python3 -m brain_tool --version
-
-# Verificar a versão do Celebro
-sudo celebro --version
+brain --version        # brain 1.1.0
+brain-tool --version   # brain-tool 1.1.0
+brain --help
 ```
 
 ---
 
-## Primeiro uso com brain_tool
-
-### 1. Criar um brain
+## Primeiro uso
 
 ```bash
-# Criar um brain para o seu sistema
-python3 -m brain_tool init --scope meu-sistema --brain-dir ~/.meu_sistema/brain/
-```
+# 1. Criar um expert (profile Hermes + brain.db + alias)
+brain add profile maria
 
-Isso cria:
-- `~/.meu_sistema/brain/brain.db` — base SQLite com o schema de conhecimento
-- `~/.meu_sistema/brain/schema_pack.yaml` — definição dos tipos/taxonomia usados
+# 2. Adicionar conhecimento
+brain remember --expert maria --tipo fact \
+  --title "Horário" --content "Segunda a sexta, 8h-18h"
 
-### 2. Adicionar conhecimento
+# 3. Consultar
+brain recall --expert maria --search "Horário"
 
-```bash
-# Salvar um conceito
-python3 -m brain_tool --brain ~/.meu_sistema/brain/ remember \
-  --tipo concepts \
-  --titulo "Meu conceito" \
-  --corpo "Descrição do meu conceito"
+# 4. Popular o global (compartilhado entre experts)
+brain global learn --content "Feriados da empresa" --title "Feriados" --sync
 
-# Salvar uma entidade
-python3 -m brain_tool --brain ~/.meu_sistema/brain/ entity \
-  --nome "João" \
-  --descricao "Responsável pelo sistema"
-```
+# 5. Ingerir arquivos com sync automático
+brain learn --expert maria --path /documentos/atendimento/ --sync
 
-### 3. Recuperar conhecimento
-
-```bash
-# Listar todos os conceitos
-python3 -m brain_tool --brain ~/.meu_sistema/brain/ recall --tipo concepts
-
-# Buscar por termo
-python3 -m brain_tool --brain ~/.meu_sistema/brain/ recall --tipo concepts --termo "conceito"
+# 6. Ver integridade e jobs
+brain check --expert maria
+brain jobs  --expert maria
 ```
 
 ---
 
-## Primeiro uso com Celebro
-
-### 1. Adicionar um profile
-
-```bash
-# Adicionar um profile para o seu sistema
-sudo celebro add profile meu-sistema
-
-# O Celebro pergunta:
-# - Qual provider usar? [Nous] 
-# - Qual LLM/default usar? [gemma4:31b ou outro free]
-# - Caminho do brain? [~/.brain/profiles/meu-sistema]
-```
-
-### 2. Usar o profile
-
-```bash
-# Agora você pode usar o brain_tool com o profile
-python3 -m brain_tool --brain ~/.brain/profiles/meu-sistema/ recall --tipo concepts
-```
-
-### 3. Sincronizar
-
-```bash
-# Sincronizar todos os profiles com o global
-sudo celebro sync
-```
-
-### 4. Backup
-
-```bash
-# Backup de todos os brains
-sudo celebro backup
-```
-
----
-
-## Estrutura de diretórios esperada
+## Estrutura esperada
 
 ```
-~/.brain/                    # raiz dos brains do usuário
-├── global/
-│   ├── brain.db             # knowledge base compartilhada
-│   └── schema_pack.yaml
-├── profiles/
-│   ├── meu-sistema/
-│   │   ├── brain.db
-│   │   └── schema_pack.yaml
-│   └── outro-profile/
-│       ├── brain.db
-│       └── schema_pack.yaml
+~/.hermes/brain/
+├── global/brain.db
+├── experts/maria/brain.db
+├── admins.json
 └── backups/
-    ├── global/
-    │   └── brain_YYYYMMDD_HHMMSS.db
-    └── profiles/
-        └── meu-sistema/
-            └── brain_YYYYMMDD_HHMMSS.db
 ```
+
+Defina `BRAIN_ROOT` para usar outra raiz (útil em testes/containers).
 
 ---
 
 ## Próximos passos
 
-- Leia a [documentação de uso](./README.md) para entender os conceitos
-- Leia a [referência de comandos](./commands.md) para saber todos os comandos disponíveis
-- Planeje seu desenvolvimento no [plan/](../plan/)
+- [README](./README.md) — conceitos
+- [commands.md](./commands.md) — referência completa
+- [plan/](../plan/) — especificação e roadmap

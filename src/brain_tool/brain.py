@@ -46,24 +46,18 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 
 SCHEMA_VERSION = "1.0.0"
+__version__ = "1.1.0"
 
 # === Importação do brain_tool (CLI core de manipulação de conhecimento) ===
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-try:
-    from brain_tool import (
-        get_brain_db_path, get_db_connection, remember, recall, forget,
-        synthesize, consolidate, learn, sync, check, list_jobs,
-        suggest_taxonomy_rules, capture_taxonomy,
-        SCHEMA_VERSION, initialize_schema
-    )
-    BRAIN_TOOL_AVAILABLE = True
-except ImportError as e:
-    print(f"AVISO: brain_tool nao importavel: {e}", file=sys.stderr)
-    print("Alguns comandos podem nao funcionar.", file=sys.stderr)
-    BRAIN_TOOL_AVAILABLE = False
+from brain_tool import (
+    get_brain_db_path, get_db_connection, remember, recall, forget,
+    synthesize, consolidate, learn, sync, check, list_jobs,
+    suggest_taxonomy_rules, capture_taxonomy, count_pages,
+    SCHEMA_VERSION, get_brain_root,
+)
 
-# === Se brain_tool nao disponivel, fallback minimo ===
-if not BRAIN_TOOL_AVAILABLE:
+# === (fallback sqlite3 legado descontinuado — brain_tool sempre importável) ===
+if False:
     import sqlite3 as _sqlite3
     import hashlib as _hashlib
 
@@ -76,7 +70,7 @@ if not BRAIN_TOOL_AVAILABLE:
         if global_brain:
             return os.path.join(GLOBAL_DIR, "brain.db")
         if expert:
-            return os.path.join(DEFAULT_BRAIN_ROOT, expert, "brain.db")
+            return os.path.join(DEFAULT_BRAIN_ROOT, "experts", expert, "brain.db")
         return os.path.join(os.getcwd(), "brain.db")
 
     def get_db_connection(db_path):
@@ -421,37 +415,61 @@ if not BRAIN_TOOL_AVAILABLE:
     def capture_taxonomy(conn, expert, content, suggested_type):
         return remember(conn, expert, suggested_type, None, content)
 
-# === Configurações globais ===
-DEFAULT_BRAIN_ROOT = os.environ.get('BRAIN_ROOT',
-    os.path.expanduser("~/.hermes/brain"))
-GLOBAL_DIR = os.path.join(DEFAULT_BRAIN_ROOT, "global")
-BACKUPS_DIR = os.path.join(DEFAULT_BRAIN_ROOT, "backups")
-ADMIN_CONFIG_FILE = os.path.join(DEFAULT_BRAIN_ROOT, "admins.json")
+# === Configurações globais (resolvidas em tempo de execução) ===
+def brain_root() -> str:
+    """Raiz compartilhada dos brains (BRAIN_ROOT ou ~/.hermes/brain)."""
+    return os.fspath(get_brain_root())
+
+
+def global_dir() -> str:
+    return os.path.join(brain_root(), "global")
+
+
+def backups_dir() -> str:
+    return os.path.join(brain_root(), "backups")
+
+
+def admin_config_file() -> str:
+    return os.path.join(brain_root(), "admins.json")
+
 
 # O "home" do framework (onde o codigo fonte mora, para git pull)
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Caminho do venv do Hermes Agent (para criar alias)
-HERMES_VENV_PYTHON = "/home/hermes/.hermes/hermes-agent/venv/bin/python"
-HERMES_CLI_MAIN = "-m hermes_cli.main"
-
 
 def load_admins() -> Dict[str, Any]:
-    if os.path.exists(ADMIN_CONFIG_FILE):
-        with open(ADMIN_CONFIG_FILE, 'r') as f:
+    path = admin_config_file()
+    if os.path.exists(path):
+        with open(path, 'r') as f:
             return json.load(f)
     return {"admins": [], "groups": {}}
 
 
 def save_admins(admins: Dict[str, Any]) -> None:
-    with open(ADMIN_CONFIG_FILE, 'w') as f:
+    path = admin_config_file()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'w') as f:
         json.dump(admins, f, indent=2)
 
 
 def get_expert_names() -> List[str]:
-    if not os.path.exists(DEFAULT_BRAIN_ROOT):
+    experts_dir = os.path.join(brain_root(), "experts")
+    if not os.path.isdir(experts_dir):
         return []
-    return sorted([d.name for d in os.scandir(DEFAULT_BRAIN_ROOT) if d.is_dir() and d.name != "global" and d.name != "backups"])
+    return sorted([d.name for d in os.scandir(experts_dir) if d.is_dir()])
+
+
+def is_admin(identifier: str, admins: Optional[Dict[str, Any]] = None) -> bool:
+    """True se o identificador está na lista de administradores (spec §5.3)."""
+    data = admins if admins is not None else load_admins()
+    return identifier in data.get("admins", [])
+
+
+def is_group_member(identifier: str, group: str,
+                    admins: Optional[Dict[str, Any]] = None) -> bool:
+    """True se o identificador é membro do grupo administrativo (spec §5.3)."""
+    data = admins if admins is not None else load_admins()
+    return identifier in data.get("groups", {}).get(group, [])
 
 
 # === Comandos do Brain ===
@@ -497,29 +515,14 @@ def cmd_add_profile(args) -> int:
         traceback.print_exc()
         return 1
 
-    # 3. Adiciona alias no bashrc
-    alias_created = False
-    try:
-        bashrc = os.path.expanduser("~/.bashrc")
-        alias_cmd = f"alias {name}='{HERMES_VENV_PYTHON} {HERMES_CLI_MAIN} --profile {name}'"
-        if os.path.exists(bashrc):
-            with open(bashrc, 'r') as f:
-                content = f.read()
-            if alias_cmd not in content:
-                with open(bashrc, 'a') as f:
-                    f.write(f"\n{alias_cmd}\n")
-                alias_created = True
-                print(f"  + Alias adicionado ao ~/.bashrc: {alias_cmd}")
-        else:
-            print(f"  - ~/.bashrc nao encontrado. Alias nao criado.", file=sys.stderr)
-    except Exception as e:
-        print(f"  - Erro ao adicionar alias: {e}", file=sys.stderr)
+    # 3. Wrapper/alias: `hermes profile create` já gera o script wrapper `<name>`.
+    # Não reinventamos — brain add profile é um alias fino sobre hermes profile create.
 
     # Resumo final
     print(f"\n  = Profile '{name}' criado")
     print(f"    - Hermes profile: {'sim' if hermes_created else 'nao'}")
     print(f"    - Brain.db: {brain_path}")
-    print(f"    - Alias: {'sim' if alias_created else 'nao'}")
+    print(f"    - Wrapper/alias: gerenciado pelo Hermes (`hermes profile alias {name}`)")
 
     return 0
 
@@ -543,21 +546,9 @@ def cmd_list_profiles(args) -> int:
         if exists:
             try:
                 conn = get_db_connection(brain_path)
-                cursor = conn.cursor()
-                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='pages'")
-                if cursor.fetchone():
-                    cursor.execute("PRAGMA table_info(pages)")
-                    columns = [r[1] for r in cursor.fetchall()]
-                    if "expert" in columns:
-                        cursor.execute("SELECT COUNT(*) FROM pages WHERE expert = ?", (name,))
-                        count = cursor.fetchone()[0]
-                        print(f"      brain.db: {brain_path}")
-                        print(f"      conhecimentos: {count}")
-                    else:
-                        print(f"      brain.db: {brain_path}")
-                        print(f"      schema: antigo (migrar para v{SCHEMA_VERSION})")
-                else:
-                    print(f"      brain.db: {brain_path} (sem tabela pages)")
+                count = count_pages(conn, name)
+                print(f"      brain.db: {brain_path}")
+                print(f"      conhecimentos: {count}")
                 conn.close()
             except Exception as e:
                 print(f"      brain.db: {brain_path}")
@@ -581,6 +572,15 @@ def cmd_remove_profile(args) -> int:
     brain_path = get_brain_db_path(expert=name)
     expert_dir = os.path.dirname(brain_path)
 
+    # Confirmação explícita antes de operação destrutiva (não-interativo: prossegue)
+    if not getattr(args, 'yes', False) and sys.stdin.isatty():
+        answer = input(
+            f"Confirmar remoção do profile '{name}' e seu brain.db? [s/N] "
+        ).strip().lower()
+        if answer not in ('s', 'sim', 'y', 'yes'):
+            print("Remoção cancelada.")
+            return 0
+
     print(f"\nRemovendo profile: {name}")
     print(f"  - brain.db: {brain_path}")
     print(f"  - diretorio: {expert_dir}")
@@ -596,17 +596,15 @@ def cmd_remove_profile(args) -> int:
             else:
                 print(f"  - diretorio nao vazio, nao removido")
 
-        # Remove alias do bashrc
-        bashrc = os.path.expanduser("~/.bashrc")
-        alias_cmd = f"alias {name}='{HERMES_VENV_PYTHON} {HERMES_CLI_MAIN} --profile {name}'"
-        if os.path.exists(bashrc):
-            with open(bashrc, 'r') as f:
-                lines = f.readlines()
-            with open(bashrc, 'w') as f:
-                for line in lines:
-                    if line.strip() != alias_cmd:
-                        f.write(line)
-            print(f"  + alias removido do ~/.bashrc")
+        # Remove o profile Hermes (e seu wrapper/alias) via comando nativo.
+        try:
+            subprocess.run(["hermes", "profile", "delete", name],
+                           capture_output=True, text=True, timeout=60)
+            print(f"  + Hermes profile '{name}' removido (wrapper/alias incluso)")
+        except FileNotFoundError:
+            print(f"  - 'hermes' CLI nao encontrado; profile Hermes nao removido.", file=sys.stderr)
+        except Exception as e:
+            print(f"  - Erro ao remover profile Hermes: {e}", file=sys.stderr)
 
         print(f"\n= Profile '{name}' removido!")
         return 0
@@ -623,42 +621,11 @@ def cmd_global_learn(args) -> int:
     conn = get_db_connection(brain_path)
     try:
         if args.path:
-            if not BRAIN_TOOL_AVAILABLE:
-                print("Erro: brain_tool nao disponivel para learn.", file=sys.stderr)
-                conn.close()
-                return 1
             result = learn(conn, "global", args.path, args.sync, dry_run=args.dry_run)
         elif args.content:
-            if BRAIN_TOOL_AVAILABLE:
-                result = remember(conn, "global", "global_policy",
-                                  args.title or "Conteudo global",
-                                  args.content, dry_run=args.dry_run)
-            else:
-                cursor = conn.cursor()
-                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='pages'")
-                if not cursor.fetchone():
-                    cursor.execute("""
-                        CREATE TABLE pages (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            expert TEXT NOT NULL, tipo TEXT NOT NULL,
-                            titulo TEXT, corpo TEXT NOT NULL,
-                            hash_canonical TEXT,
-                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                        )
-                    """)
-                else:
-                    cursor.execute("PRAGMA table_info(pages)")
-                    cols = [r[1] for r in cursor.fetchall()]
-                    if "expert" not in cols:
-                        cursor.execute("ALTER TABLE pages ADD COLUMN expert TEXT NOT NULL DEFAULT 'unknown'")
-                    if "hash_canonical" not in cols:
-                        cursor.execute("ALTER TABLE pages ADD COLUMN hash_canonical TEXT")
-                cursor.execute("""
-                    INSERT INTO pages (expert, tipo, titulo, corpo, hash_canonical)
-                    VALUES (?, 'global_policy', ?, ?, ?)
-                """, ("global", args.title or "Conteudo global", args.content, None))
-                conn.commit()
-                result = {"action": "remember", "expert": "global", "status": "ok"}
+            result = remember(conn, "global", "global_policy",
+                              args.title or "Conteudo global",
+                              args.content, dry_run=args.dry_run)
         else:
             print("Erro: especifique --path ou --content", file=sys.stderr)
             conn.close()
@@ -677,11 +644,12 @@ def cmd_global_learn(args) -> int:
 def cmd_backup(args) -> int:
     """Faz backup de todos os brains (global + experts)."""
     print(f"\n=== Brain: Backup de todos os brains ===")
-    if not os.path.exists(BACKUPS_DIR):
-        os.makedirs(BACKUPS_DIR, exist_ok=True)
+    bdir = backups_dir()
+    if not os.path.exists(bdir):
+        os.makedirs(bdir, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_dir = os.path.join(BACKUPS_DIR, f"backup_{timestamp}")
+    backup_dir = os.path.join(bdir, f"backup_{timestamp}")
     os.makedirs(backup_dir, exist_ok=True)
 
     brains = []
@@ -759,19 +727,7 @@ def cmd_sync_all(args) -> int:
             continue
         try:
             conn = get_db_connection(bp)
-            if BRAIN_TOOL_AVAILABLE:
-                result = sync(conn, name)
-            else:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT COUNT(*) FROM knowledge_staging WHERE expert = ? AND status = 'pending'",
-                    (name,))
-                pending = cursor.fetchone()[0]
-                if pending == 0:
-                    result = {"action": "sync", "status": "nothing_to_sync", "pending_count": 0}
-                else:
-                    result = {"action": "sync", "status": "skipped",
-                              "reason": "sync nao disponivel sem brain_tool"}
+            result = sync(conn, name)
             results.append({"name": name, **result})
             conn.close()
         except Exception as e:
@@ -1058,6 +1014,10 @@ Para conhecer mais:
   brain <comando> --help
         """)
 
+    parser.add_argument(
+        "--version", action="version", version=f"brain {__version__}",
+        help="Exibe a versão e sai",
+    )
     sp = parser.add_subparsers(dest='command')
 
     # --- Gestão ---
@@ -1076,6 +1036,7 @@ Para conhecer mais:
     p_rem_sub = p_rem.add_subparsers(dest='subcommand')
     p_rem_profile = p_rem_sub.add_parser('profile', help='Remove um profile')
     p_rem_profile.add_argument('name', nargs='?', help='Nome do profile')
+    p_rem_profile.add_argument('--yes', action='store_true', help='Remove sem confirmacao')
     p_rem.set_defaults(func=lambda args: cmd_remove_profile(args))
 
     p_global = sp.add_parser('global', help='Operacoes com brain global')
