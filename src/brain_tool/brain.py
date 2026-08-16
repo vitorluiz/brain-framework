@@ -46,7 +46,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 
 SCHEMA_VERSION = "1.0.0"
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 # === Importação do brain_tool (CLI core de manipulação de conhecimento) ===
 from brain_tool import (
@@ -973,6 +973,67 @@ def cmd_capture(args) -> int:
     return 0
 
 
+# === Dashboard web (FastAPI) ===
+
+def _load_dashboard():
+    """Importa o módulo do dashboard lazy (evita exigir fastapi no CLI/plugin)."""
+    try:
+        from brain_tool import dashboard
+        return dashboard
+    except ImportError:
+        print("Dashboard requer o extra 'dashboard'. Instale: "
+              "pip install 'brain-framework[dashboard]'", file=sys.stderr)
+        return None
+
+
+def cmd_dashboard_serve(args) -> int:
+    """Sobe o dashboard web (spec §6.3)."""
+    dash = _load_dashboard()
+    if dash is None:
+        return 1
+    host = getattr(args, "host", "127.0.0.1")
+    port = getattr(args, "port", 8611)
+    print(f"\n=== Brain: Dashboard ===\n  URL: http://{host}:{port}")
+    return dash.serve(host=host, port=port)
+
+
+def cmd_dashboard_add_user(args) -> int:
+    dash = _load_dashboard()
+    if dash is None:
+        return 1
+    try:
+        dash.add_dashboard_user(args.username, args.password)
+    except ValueError as e:
+        print(f"Erro: {e}", file=sys.stderr)
+        return 1
+    print(f"+ Usuario do dashboard adicionado: {args.username}")
+    return 0
+
+
+def cmd_dashboard_list_users(args) -> int:
+    dash = _load_dashboard()
+    if dash is None:
+        return 1
+    users = dash.list_dashboard_users()
+    print(f"\n=== Usuarios do dashboard ({len(users)}) ===")
+    for u in users:
+        print(f"  - {u}")
+    if not users:
+        print("Nenhum usuario. Crie: brain dashboard add-user <usuario> <senha>")
+    return 0
+
+
+def cmd_dashboard_remove_user(args) -> int:
+    dash = _load_dashboard()
+    if dash is None:
+        return 1
+    if dash.remove_dashboard_user(args.username):
+        print(f"+ Usuario removido: {args.username}")
+        return 0
+    print(f"Usuario nao encontrado: {args.username}", file=sys.stderr)
+    return 1
+
+
 # === Main ===
 
 def main() -> int:
@@ -998,6 +1059,7 @@ Comandos de Gestão:
   admin list           - Lista administradores configurados
   admin add TYPE ID    - Adiciona administrador (whatsapp/cli/grupo)
   admin remove ID      - Remove administrador
+  dashboard            - Dashboard web (serve/add-user/list-users/remove-user)
 
 Comandos de Conhecimento (via brain_tool):
   init --name NAME     - Inicializa um novo brain.db
@@ -1079,6 +1141,30 @@ Para conhecer mais:
     p_admin_remove = p_admin_sub.add_parser('remove', help='Remove administrador')
     p_admin_remove.add_argument('identifier', help='Identificador')
     p_admin_remove.set_defaults(func=lambda args: cmd_admin_remove(args))
+
+    # --- Dashboard web ---
+    p_dash = sp.add_parser('dashboard', help='Dashboard web do Brain (spec §6.3)')
+    p_dash_sub = p_dash.add_subparsers(dest='subcommand')
+
+    p_dash_serve = p_dash_sub.add_parser('serve', help='Sobe o dashboard web')
+    p_dash_serve.add_argument('--host', default='127.0.0.1', help='Host (default 127.0.0.1)')
+    p_dash_serve.add_argument('--port', type=int, default=8611, help='Porta (default 8611)')
+    p_dash_serve.set_defaults(func=lambda args: cmd_dashboard_serve(args))
+
+    p_dash_add = p_dash_sub.add_parser('add-user', help='Adiciona usuario do dashboard')
+    p_dash_add.add_argument('username', help='Nome de usuario')
+    p_dash_add.add_argument('password', help='Senha')
+    p_dash_add.set_defaults(func=lambda args: cmd_dashboard_add_user(args))
+
+    p_dash_list = p_dash_sub.add_parser('list-users', help='Lista usuarios do dashboard')
+    p_dash_list.set_defaults(func=lambda args: cmd_dashboard_list_users(args))
+
+    p_dash_remove = p_dash_sub.add_parser('remove-user', help='Remove usuario do dashboard')
+    p_dash_remove.add_argument('username', help='Nome de usuario')
+    p_dash_remove.set_defaults(func=lambda args: cmd_dashboard_remove_user(args))
+
+    # `brain dashboard` sem subcomando sobe o servidor (defaults aplicados no cmd).
+    p_dash.set_defaults(func=lambda args: cmd_dashboard_serve(args))
 
     # --- Conhecimento (brain_tool) ---
     # Init

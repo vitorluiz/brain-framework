@@ -31,7 +31,7 @@ from .db import (
 )
 from .models import Job, KnowledgeStaging, Page
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 
 def generate_canonical_hash(content: str) -> str:

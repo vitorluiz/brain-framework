@@ -24,8 +24,8 @@ pip install -e ".[learn]"
 ## Verificar a instalação
 
 ```bash
-brain --version        # brain 1.1.0
-brain-tool --version   # brain-tool 1.1.0
+brain --version        # brain 1.2.0
+brain-tool --version   # brain-tool 1.2.0
 brain --help
 ```
 
