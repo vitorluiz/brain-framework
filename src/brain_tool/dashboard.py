@@ -222,6 +222,11 @@ def _load_or_create_token() -> str:
     return generated
 
 
+def get_access_token() -> str:
+    """Retorna o token de acesso persistente (CLI `brain dashboard token`)."""
+    return _load_or_create_token()
+
+
 def _lan_ip() -> Optional[str]:
     """IP da máquina na LAN (best-effort, só para dica de URL)."""
     try:
@@ -437,6 +442,18 @@ def create_app(secret: Optional[str] = None, token: Optional[str] = None) -> Fas
                         max_age=_SESSION_TTL)
         return resp
 
+    @app.post("/login-token")
+    async def login_token(token: str = Form(...), _origin: None = Depends(same_origin)):
+        if not hmac.compare_digest(token, access_token):
+            _audit("token_login_failure")
+            return JSONResponse({"ok": False, "error": "token invalido"}, status_code=401)
+        _audit("token_login")
+        resp = JSONResponse({"ok": True, "user": "admin"})
+        resp.set_cookie(_COOKIE, _make_token(secret, "admin"),
+                        httponly=True, samesite="strict", secure=secure_cookies,
+                        max_age=_SESSION_TTL)
+        return resp
+
     @app.get("/logout")
     def logout() -> RedirectResponse:
         resp = RedirectResponse("/")
@@ -637,6 +654,11 @@ pre { background: #0c0e12; padding: 10px; border-radius: 6px; overflow: auto;
     <input name="password" type="password" autocomplete="current-password" required>
     <p id="login-error"></p>
     <button type="submit">Entrar</button>
+    <hr style="margin:16px 0;border-color:#22262f">
+    <p class="muted" style="margin:0 0 8px">Ou use o token de acesso (<code>brain dashboard token</code>):</p>
+    <label>Token</label>
+    <input id="token-input" placeholder="cole o token aqui">
+    <button type="button" id="token-login-btn" style="margin-top:8px">Entrar com token</button>
   </form>
 </div>
 
@@ -736,6 +758,23 @@ $("login-form").addEventListener("submit", async (e) => {
     const data = await r.json();
     if (r.ok) { await boot(); }
     else { $("login-error").textContent = data.error || "Login falhou"; }
+  } catch (err) { $("login-error").textContent = "Erro de conexão"; }
+});
+
+$("token-login-btn").addEventListener("click", async () => {
+  const token = $("token-input").value.trim();
+  if (!token) return;
+  try {
+    const r = await fetch("/login-token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token }),
+    });
+    if (r.ok) { await boot(); }
+    else {
+      const data = await r.json().catch(() => ({}));
+      $("login-error").textContent = data.error || data.detail || "Token inválido";
+    }
   } catch (err) { $("login-error").textContent = "Erro de conexão"; }
 });
 

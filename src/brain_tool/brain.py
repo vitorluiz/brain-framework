@@ -1033,6 +1033,15 @@ def cmd_dashboard_remove_user(args) -> int:
     return 1
 
 
+def cmd_dashboard_token(args) -> int:
+    """Exibe o token de acesso persistente (para retomar a sessão sem restart)."""
+    dash = _load_dashboard()
+    if dash is None:
+        return 1
+    print(dash.get_access_token())
+    return 0
+
+
 # === Main ===
 
 def main() -> int:
@@ -1164,6 +1173,9 @@ Para conhecer mais:
     p_dash_remove = p_dash_sub.add_parser('remove-user', help='Remove usuario do dashboard')
     p_dash_remove.add_argument('username', help='Nome de usuario')
     p_dash_remove.set_defaults(func=lambda args: cmd_dashboard_remove_user(args))
+
+    p_dash_token = p_dash_sub.add_parser('token', help='Exibe o token de acesso atual')
+    p_dash_token.set_defaults(func=lambda args: cmd_dashboard_token(args))
 
     # `brain dashboard` sem subcomando sobe o servidor (defaults aplicados no cmd).
     p_dash.set_defaults(func=lambda args: cmd_dashboard_serve(args))

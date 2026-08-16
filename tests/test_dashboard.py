@@ -245,5 +245,24 @@ def test_status_endpoint_requires_auth(client):
     assert client.get("/api/status").status_code == 401
 
 
+# --- login por token (retomada de sessão) ------------------------------------
+
+def test_login_token_valid(client):
+    r = client.post("/login-token", data={"token": "test-token"})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    assert client.get("/api/me").json()["user"] == "admin"
+
+
+def test_login_token_invalid(client):
+    r = client.post("/login-token", data={"token": "token-errado"})
+    assert r.status_code == 401
+
+
+def test_get_access_token_returns_persisted():
+    assert dashboard.get_access_token() == dashboard._load_or_create_token()
+
+
+
 
 
