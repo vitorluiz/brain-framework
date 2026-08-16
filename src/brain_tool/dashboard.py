@@ -26,6 +26,7 @@ import hmac
 import json
 import os
 import secrets
+import subprocess
 import threading
 import time
 import uuid
@@ -287,6 +288,62 @@ def _audit(event: str, **fields) -> None:
         pass
 
 
+# --- Status dos serviços (Redis / Celery / Docker) --------------------------
+
+def _redis_status() -> dict:
+    url = (os.environ.get("REDIS_URL")
+           or os.environ.get("CELERY_BROKER_URL")
+           or "redis://localhost:6379/0")
+    try:
+        import redis
+
+        r = redis.Redis.from_url(url, socket_connect_timeout=2, socket_timeout=2)
+        r.ping()
+        return {"ok": True, "url": url, "detail": "pong"}
+    except Exception as e:  # noqa: BLE001 — status é best-effort
+        return {"ok": False, "url": url, "detail": str(e)}
+
+
+def _celery_status() -> dict:
+    broker = (os.environ.get("CELERY_BROKER_URL")
+              or os.environ.get("REDIS_URL")
+              or "redis://localhost:6379/0")
+    try:
+        from brain_tool.worker import app as celery_app
+
+        ping = celery_app.control.inspect(timeout=2).ping()
+        workers = sorted(ping.keys()) if ping else []
+        if workers:
+            return {"ok": True, "broker": broker, "workers": workers,
+                    "detail": f"{len(workers)} worker(s): {', '.join(workers)}"}
+        return {"ok": True, "broker": broker, "workers": [],
+                "detail": "broker ok, nenhum worker rodando"}
+    except Exception as e:  # noqa: BLE001 — status é best-effort
+        return {"ok": False, "broker": broker, "detail": str(e)}
+
+
+def _docker_status() -> dict:
+    try:
+        info = subprocess.run(["docker", "info"], capture_output=True, text=True, timeout=5)
+        if info.returncode != 0:
+            return {"ok": False, "detail": (info.stderr or "docker indisponível").strip()[:300]}
+        ps = subprocess.run(
+            ["docker", "ps", "--format", "{{.Names}}\t{{.Status}}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        containers = []
+        for line in ps.stdout.strip().splitlines():
+            if line.strip():
+                name, sep, status = line.partition("\t")
+                containers.append({"name": name, "status": status})
+        return {"ok": True, "containers": containers,
+                "detail": f"{len(containers)} contêiner(es) rodando"}
+    except FileNotFoundError:
+        return {"ok": False, "detail": "docker CLI não encontrado"}
+    except Exception as e:  # noqa: BLE001 — status é best-effort
+        return {"ok": False, "detail": str(e)}
+
+
 # --- Helpers de domínio -----------------------------------------------------
 
 def _expert_names() -> List[str]:
@@ -487,6 +544,14 @@ def create_app(secret: Optional[str] = None, token: Optional[str] = None) -> Fas
         finally:
             conn.close()
 
+    @app.get("/api/status")
+    def api_status(user: str = Depends(current_user)):
+        return {
+            "redis": _redis_status(),
+            "celery": _celery_status(),
+            "docker": _docker_status(),
+        }
+
     return app
 
 
@@ -637,6 +702,15 @@ pre { background: #0c0e12; padding: 10px; border-radius: 6px; overflow: auto;
       <button class="secondary" id="check-btn" style="width:auto">Verificar</button>
       <pre id="check-result" class="hidden"></pre>
     </section>
+
+    <section>
+      <h2>Status dos serviços</h2>
+      <div class="row">
+        <button class="secondary" id="refresh-status" style="width:auto">Atualizar</button>
+        <span class="muted" id="status-meta"></span>
+      </div>
+      <div id="status-box"><span class="muted">Carregando…</span></div>
+    </section>
   </main>
 </div>
 
@@ -755,6 +829,28 @@ $("check-btn").addEventListener("click", async () => {
   }
 });
 
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function loadStatus() {
+  try {
+    const data = await api("/api/status");
+    $("status-box").innerHTML = ["redis", "celery", "docker"].map((k) => {
+      const s = data[k] || {};
+      const ok = !!s.ok;
+      return `<div style="margin:8px 0;padding:8px 10px;border:1px solid #22262f;border-radius:6px">
+        <strong>${k}</strong> <span class="status-${ok ? 'completed' : 'failed'}">${ok ? 'OK' : 'FALHA'}</span>
+        <div class="muted">${escapeHtml(s.detail || '')}</div>
+      </div>`;
+    }).join("");
+  } catch (err) {
+    $("status-box").innerHTML = `<p class="muted">Erro: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+$("refresh-status").addEventListener("click", loadStatus);
+
 async function boot() {
   try {
     const me = await api("/api/me");
@@ -762,11 +858,13 @@ async function boot() {
     showApp();
     await loadExperts();
     await loadJobs();
+    await loadStatus();
   } catch (err) { showLogin(); }
 }
 
 boot();
 setInterval(() => { if (!$("app-view").classList.contains("hidden")) loadJobs().catch(() => {}); }, 5000);
+setInterval(() => { if (!$("app-view").classList.contains("hidden")) loadStatus().catch(() => {}); }, 30000);
 </script>
 </body>
 </html>

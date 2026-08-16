@@ -225,4 +225,25 @@ def test_learn_url_rejected_private(client):
     assert r.status_code == 400
 
 
+# --- status dos serviços -----------------------------------------------------
+
+def test_status_endpoint(client, monkeypatch):
+    _login(client)
+    monkeypatch.setattr(dashboard, "_redis_status", lambda: {"ok": True, "detail": "pong"})
+    monkeypatch.setattr(dashboard, "_celery_status", lambda: {"ok": True, "detail": "1 worker"})
+    monkeypatch.setattr(dashboard, "_docker_status", lambda: {"ok": True, "detail": "2 contêineres"})
+    r = client.get("/api/status")
+    assert r.status_code == 200
+    data = r.json()
+    assert set(data.keys()) == {"redis", "celery", "docker"}
+    for k in ("redis", "celery", "docker"):
+        assert data[k]["ok"] is True
+        assert "detail" in data[k]
+
+
+def test_status_endpoint_requires_auth(client):
+    assert client.get("/api/status").status_code == 401
+
+
+
 
