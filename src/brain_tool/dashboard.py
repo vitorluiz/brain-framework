@@ -26,10 +26,13 @@ import hmac
 import json
 import os
 import secrets
+import threading
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
+from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -48,6 +51,9 @@ DEFAULT_PORT = 8611
 _PBKDF2_ITERATIONS = 100_000
 _COOKIE = "brain_session"
 _SESSION_TTL = 8 * 3600  # 8 horas
+_LOGIN_MAX_FAILURES = 5
+_LOGIN_LOCKOUT_SECONDS = 300
+MAX_UPLOAD_BYTES = int(os.environ.get("BRAIN_DASHBOARD_MAX_UPLOAD", str(50 * 1024 * 1024)))
 
 
 # --- Credenciais de administradores (admins.json) ---------------------------
@@ -132,7 +138,12 @@ def remove_dashboard_user(username: str) -> bool:
 def authenticate(username: str, password: str) -> bool:
     users = _load_admins().get("dashboard_users", {})
     stored = users.get(username)
-    return bool(stored) and _verify_password(password, stored)
+    if not stored:
+        # Gasta CPU equivalente a uma verificação real para não vazar (timing)
+        # quais usernames existem.
+        _hash_password(password)
+        return False
+    return _verify_password(password, stored)
 
 
 # --- Sessão assinada (cookie stateless) -------------------------------------
@@ -170,6 +181,112 @@ def _verify_token(secret: str, token: str) -> Optional[str]:
         return None
 
 
+# --- Secret persistente + rate limiting + audit -----------------------------
+
+def _load_or_create_secret() -> str:
+    """Secret estável da sessão: env, ou arquivo 0600 persistido no brain root.
+
+    Um secret persistente (em vez de por-processo) é necessário para que a
+    sessão sobreviva a restarts e funcione com múltiplos workers/reverse proxy.
+    """
+    env = os.environ.get("BRAIN_DASHBOARD_SECRET")
+    if env:
+        return env
+    path = get_brain_root() / ".dashboard_secret"
+    if path.exists():
+        existing = path.read_text(encoding="utf-8").strip()
+        if existing:
+            return existing
+    generated = secrets.token_hex(32)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path.write_text(generated, encoding="utf-8")
+    os.chmod(path, 0o600)
+    return generated
+
+
+def _load_or_create_token() -> str:
+    """Token de acesso (auth single-admin) — env ou `.dashboard_token` 0600."""
+    env = os.environ.get("BRAIN_DASHBOARD_TOKEN")
+    if env:
+        return env
+    path = get_brain_root() / ".dashboard_token"
+    if path.exists():
+        existing = path.read_text(encoding="utf-8").strip()
+        if existing:
+            return existing
+    generated = secrets.token_hex(32)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path.write_text(generated, encoding="utf-8")
+    os.chmod(path, 0o600)
+    return generated
+
+
+def _lan_ip() -> Optional[str]:
+    """IP da máquina na LAN (best-effort, só para dica de URL)."""
+    try:
+        import socket
+
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(1)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return None
+
+
+class _LoginRateLimiter:
+    """Lockout em memória por usuário (anti brute-force)."""
+
+    def __init__(self, max_failures: int, lockout_seconds: int):
+        self.max_failures = max_failures
+        self.lockout_seconds = lockout_seconds
+        self._failures: dict = {}
+        self._locks: dict = {}
+        self._lock = threading.Lock()
+
+    def is_locked(self, username: str) -> bool:
+        now = time.time()
+        with self._lock:
+            until = self._locks.get(username)
+            if until and until > now:
+                return True
+            if until:
+                self._locks.pop(username, None)
+            return False
+
+    def record_failure(self, username: str) -> None:
+        now = time.time()
+        with self._lock:
+            recent = [t for t in self._failures.get(username, [])
+                      if now - t < self.lockout_seconds]
+            recent.append(now)
+            if len(recent) >= self.max_failures:
+                self._locks[username] = now + self.lockout_seconds
+                self._failures[username] = []
+            else:
+                self._failures[username] = recent
+
+    def record_success(self, username: str) -> None:
+        with self._lock:
+            self._failures.pop(username, None)
+            self._locks.pop(username, None)
+
+
+def _audit(event: str, **fields) -> None:
+    """Registra evento em audit.log (best-effort; nunca derruba o fluxo)."""
+    try:
+        path = get_brain_root() / "audit.log"
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        entry = {"ts": datetime.utcnow().isoformat() + "Z", "event": event, **fields}
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        os.chmod(path, 0o600)
+    except Exception:
+        pass
+
+
 # --- Helpers de domínio -----------------------------------------------------
 
 def _expert_names() -> List[str]:
@@ -187,30 +304,80 @@ def _uploads_dir() -> Path:
 
 # --- App --------------------------------------------------------------------
 
-def create_app(secret: Optional[str] = None) -> FastAPI:
-    secret = secret or os.environ.get("BRAIN_DASHBOARD_SECRET") or secrets.token_hex(32)
+def create_app(secret: Optional[str] = None, token: Optional[str] = None) -> FastAPI:
+    secret = secret or _load_or_create_secret()
+    access_token = token or _load_or_create_token()
+    secure_cookies = os.environ.get("BRAIN_DASHBOARD_SECURE_COOKIES", "") in ("1", "true", "yes")
+    limiter = _LoginRateLimiter(_LOGIN_MAX_FAILURES, _LOGIN_LOCKOUT_SECONDS)
 
     app = FastAPI(title="Brain Dashboard", docs_url=None, redoc_url=None)
 
     def current_user(request: Request) -> str:
-        token = request.cookies.get(_COOKIE)
-        user = _verify_token(secret, token) if token else None
-        if not user:
-            raise HTTPException(status_code=401, detail="nao autenticado")
-        return user
+        # 1) sessão por cookie (login por senha OU troca de token)
+        cookie = request.cookies.get(_COOKIE)
+        user = _verify_token(secret, cookie) if cookie else None
+        if user:
+            return user
+        # 2) token bearer (Authorization: Bearer <token>)
+        auth = request.headers.get("authorization", "")
+        if auth.lower().startswith("bearer ") and hmac.compare_digest(auth[7:].strip(), access_token):
+            return "admin"
+        raise HTTPException(status_code=401, detail="nao autenticado")
+
+    def same_origin(request: Request) -> None:
+        """Bloqueia POST cross-origin (defesa CSRF em profundidade).
+
+        Clientes sem header Origin (curl/CLI) são permitidos; quando o header
+        existe, o host de origem precisa bater com o host da requisição.
+        """
+        origin = request.headers.get("origin")
+        if not origin:
+            return
+        try:
+            o = urlparse(origin)
+            if o.hostname != request.url.hostname:
+                raise HTTPException(status_code=403, detail="origem nao permitida")
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=403, detail="origem nao permitida")
 
     @app.get("/", response_class=HTMLResponse)
-    def index() -> HTMLResponse:
+    def index(token: Optional[str] = None):
+        if token:
+            if hmac.compare_digest(token, access_token):
+                _audit("token_login")
+                resp = RedirectResponse("/", status_code=302)
+                resp.set_cookie(_COOKIE, _make_token(secret, "admin"),
+                                httponly=True, samesite="strict", secure=secure_cookies,
+                                max_age=_SESSION_TTL)
+                return resp
+            return RedirectResponse("/", status_code=302)
         return HTMLResponse(_INDEX_HTML)
 
     @app.post("/login")
-    async def login(username: str = Form(...), password: str = Form(...)):
+    async def login(
+        username: str = Form(...),
+        password: str = Form(...),
+        _origin: None = Depends(same_origin),
+    ):
+        if limiter.is_locked(username):
+            _audit("login_locked", user=username)
+            return JSONResponse(
+                {"ok": False, "error": "muitas tentativas; aguarde antes de tentar novamente"},
+                status_code=429,
+            )
         if not authenticate(username, password):
+            limiter.record_failure(username)
+            _audit("login_failure", user=username)
             return JSONResponse({"ok": False, "error": "credenciais invalidas"},
                                 status_code=401)
+        limiter.record_success(username)
+        _audit("login_success", user=username)
         resp = JSONResponse({"ok": True, "user": username})
         resp.set_cookie(_COOKIE, _make_token(secret, username),
-                        httponly=True, samesite="lax", max_age=_SESSION_TTL)
+                        httponly=True, samesite="strict", secure=secure_cookies,
+                        max_age=_SESSION_TTL)
         return resp
 
     @app.get("/logout")
@@ -239,6 +406,7 @@ def create_app(secret: Optional[str] = None) -> FastAPI:
 
     @app.post("/api/learn")
     async def api_learn(
+        _origin: None = Depends(same_origin),
         user: str = Depends(current_user),
         expert: str = Form(...),
         global_brain: bool = Form(False),
@@ -269,10 +437,17 @@ def create_app(secret: Optional[str] = None) -> FastAPI:
             for f in uploads:
                 safe_name = Path(f.filename or "upload").name
                 dest = _uploads_dir() / f"{uuid.uuid4().hex}_{safe_name}"
-                content = await f.read()
+                content = await f.read(MAX_UPLOAD_BYTES + 1)
+                if len(content) > MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"arquivo excede o limite de {MAX_UPLOAD_BYTES // (1024 * 1024)}MB",
+                    )
                 dest.write_bytes(content)
                 os.chmod(dest, 0o600)
                 results.append(learn(conn, target, str(dest), sync_immediately=sync_flag))
+            _audit("learn", user=user, target=target, sync=sync_flag,
+                   path=path or None, files=[f.filename for f in uploads])
             return {"ok": True, "target": target, "results": results}
         finally:
             conn.close()
@@ -311,6 +486,16 @@ def create_app(secret: Optional[str] = None) -> FastAPI:
 def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> int:
     import uvicorn
 
+    access_token = _load_or_create_token()
+    print("\n=== Brain Dashboard ===")
+    print(f"  Token de acesso: {access_token}")
+    print(f"  Local:  http://127.0.0.1:{port}/?token={access_token}")
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        lan = _lan_ip()
+        if lan:
+            print(f"  LAN:    http://{lan}:{port}/?token={access_token}")
+    print("  (login por usuário/senha continua disponível, se configurado)")
+    print()
     uvicorn.run(create_app(), host=host, port=port, log_level="info")
     return 0
 

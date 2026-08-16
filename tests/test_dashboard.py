@@ -8,7 +8,7 @@ from brain_tool import dashboard
 
 @pytest.fixture()
 def client():
-    app = dashboard.create_app(secret="test-secret")
+    app = dashboard.create_app(secret="test-secret", token="test-token")
     dashboard.add_dashboard_user("admin", "s3cret")
     with TestClient(app) as c:
         yield c
@@ -128,3 +128,76 @@ def test_check_endpoint(client):
     r = client.get("/api/check", params={"expert": "maria"})
     assert r.status_code == 200
     assert r.json()["integrity"] == "ok"
+
+
+# --- hardening de segurança -------------------------------------------------
+
+def test_login_cross_origin_rejected(client):
+    r = client.post(
+        "/login",
+        headers={"Origin": "http://evil.com"},
+        data={"username": "admin", "password": "s3cret"},
+    )
+    assert r.status_code == 403
+
+
+def test_login_lockout_after_failures(client):
+    for _ in range(5):
+        r = client.post("/login", data={"username": "admin", "password": "errada"})
+        assert r.status_code == 401
+    # 6ª tentativa, mesmo com a senha correta, é bloqueada pelo lockout
+    r = client.post("/login", data={"username": "admin", "password": "s3cret"})
+    assert r.status_code == 429
+
+
+def test_upload_size_limit(client, monkeypatch):
+    _login(client)
+    monkeypatch.setattr(dashboard, "MAX_UPLOAD_BYTES", 10)
+    r = client.post(
+        "/api/learn",
+        data={"expert": "maria", "sync_flag": "true"},
+        files={"files": ("big.txt", b"x" * 100, "text/plain")},
+    )
+    assert r.status_code == 413
+
+
+def test_audit_log_written(client):
+    _login(client)
+    path = dashboard.get_brain_root() / "audit.log"
+    assert path.exists()
+    assert '"event": "login_success"' in path.read_text(encoding="utf-8")
+
+
+def test_secret_persisted_across_apps():
+    s1 = dashboard._load_or_create_secret()
+    s2 = dashboard._load_or_create_secret()
+    assert s1 == s2
+    assert (dashboard.get_brain_root() / ".dashboard_secret").exists()
+
+
+# --- autenticação por token (LAN / single-admin) -----------------------------
+
+def test_token_query_login(client):
+    r = client.get("/?token=test-token", follow_redirects=False)
+    assert r.status_code == 302
+    assert client.get("/api/me").json()["user"] == "admin"
+
+
+def test_token_bearer_auth(client):
+    r = client.get("/api/me", headers={"Authorization": "Bearer test-token"})
+    assert r.status_code == 200
+    assert r.json()["user"] == "admin"
+
+
+def test_token_invalid_rejected(client):
+    r = client.get("/api/me", headers={"Authorization": "Bearer token-errado"})
+    assert r.status_code == 401
+
+
+def test_token_generated_and_persisted():
+    t1 = dashboard._load_or_create_token()
+    t2 = dashboard._load_or_create_token()
+    assert t1 == t2
+    assert (dashboard.get_brain_root() / ".dashboard_token").exists()
+
+

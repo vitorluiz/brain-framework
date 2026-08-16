@@ -993,7 +993,6 @@ def cmd_dashboard_serve(args) -> int:
         return 1
     host = getattr(args, "host", "127.0.0.1")
     port = getattr(args, "port", 8611)
-    print(f"\n=== Brain: Dashboard ===\n  URL: http://{host}:{port}")
     return dash.serve(host=host, port=port)
 
 
@@ -1144,6 +1143,9 @@ Para conhecer mais:
 
     # --- Dashboard web ---
     p_dash = sp.add_parser('dashboard', help='Dashboard web do Brain (spec §6.3)')
+    p_dash.add_argument('--host', default='127.0.0.1',
+                        help='Host de bind (default 127.0.0.1; use 0.0.0.0 para LAN)')
+    p_dash.add_argument('--port', type=int, default=8611, help='Porta (default 8611)')
     p_dash_sub = p_dash.add_subparsers(dest='subcommand')
 
     p_dash_serve = p_dash_sub.add_parser('serve', help='Sobe o dashboard web')
