@@ -598,9 +598,12 @@ def cmd_remove_profile(args) -> int:
 
         # Remove o profile Hermes (e seu wrapper/alias) via comando nativo.
         try:
-            subprocess.run(["hermes", "profile", "delete", name],
-                           capture_output=True, text=True, timeout=60)
-            print(f"  + Hermes profile '{name}' removido (wrapper/alias incluso)")
+            result = subprocess.run(["hermes", "profile", "delete", name, "-y"],
+                                    capture_output=True, text=True, timeout=60)
+            if result.returncode == 0:
+                print(f"  + Hermes profile '{name}' removido (wrapper/alias incluso)")
+            else:
+                print(f"  - Hermes profile delete falhou: {result.stderr.strip()}", file=sys.stderr)
         except FileNotFoundError:
             print(f"  - 'hermes' CLI nao encontrado; profile Hermes nao removido.", file=sys.stderr)
         except Exception as e:
