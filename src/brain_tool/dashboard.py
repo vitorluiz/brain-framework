@@ -412,6 +412,7 @@ def create_app(secret: Optional[str] = None, token: Optional[str] = None) -> Fas
         global_brain: bool = Form(False),
         sync_flag: bool = Form(False),
         path: str = Form(""),
+        url: str = Form(""),
         files: Optional[List[UploadFile]] = File(default=None),
     ):
         if global_brain:
@@ -423,10 +424,11 @@ def create_app(secret: Optional[str] = None, token: Optional[str] = None) -> Fas
                 raise HTTPException(status_code=400, detail=str(e))
 
         path = (path or "").strip()
+        url = (url or "").strip()
         uploads = [f for f in (files or []) if f.filename]
-        if not path and not uploads:
+        if not path and not url and not uploads:
             raise HTTPException(
-                status_code=400, detail="informe um caminho no servidor ou envie arquivos"
+                status_code=400, detail="informe um caminho, uma URL ou envie arquivos"
             )
 
         conn = get_session(expert=target, global_brain=global_brain)
@@ -434,6 +436,11 @@ def create_app(secret: Optional[str] = None, token: Optional[str] = None) -> Fas
             results = []
             if path:
                 results.append(learn(conn, target, path, sync_immediately=sync_flag))
+            if url:
+                try:
+                    results.append(learn(conn, target, url, sync_immediately=sync_flag))
+                except ValueError as e:
+                    raise HTTPException(status_code=400, detail=str(e))
             for f in uploads:
                 safe_name = Path(f.filename or "upload").name
                 dest = _uploads_dir() / f"{uuid.uuid4().hex}_{safe_name}"
@@ -447,7 +454,7 @@ def create_app(secret: Optional[str] = None, token: Optional[str] = None) -> Fas
                 os.chmod(dest, 0o600)
                 results.append(learn(conn, target, str(dest), sync_immediately=sync_flag))
             _audit("learn", user=user, target=target, sync=sync_flag,
-                   path=path or None, files=[f.filename for f in uploads])
+                   path=path or None, url=url or None, files=[f.filename for f in uploads])
             return {"ok": True, "target": target, "results": results}
         finally:
             conn.close()
@@ -587,6 +594,7 @@ pre { background: #0c0e12; padding: 10px; border-radius: 6px; overflow: auto;
           <select id="mode">
             <option value="upload">Upload de arquivos</option>
             <option value="path">Caminho no servidor</option>
+            <option value="url">URL</option>
           </select>
         </div>
       </div>
@@ -597,6 +605,10 @@ pre { background: #0c0e12; padding: 10px; border-radius: 6px; overflow: auto;
       <div id="path-box" class="hidden">
         <label>Caminho no servidor (arquivo ou diretório)</label>
         <input type="text" id="path" placeholder="/caminho/absoluto">
+      </div>
+      <div id="url-box" class="hidden">
+        <label>URL (http/https)</label>
+        <input type="text" id="url" placeholder="https://exemplo.com/doc">
       </div>
       <label style="margin-top:10px">
         <input type="checkbox" id="sync" checked style="width:auto"> Sincronizar imediatamente (sync)
@@ -656,9 +668,10 @@ $("login-form").addEventListener("submit", async (e) => {
 $("logout").addEventListener("click", () => { location.href = "/logout"; });
 
 $("mode").addEventListener("change", () => {
-  const upload = $("mode").value === "upload";
-  $("upload-box").classList.toggle("hidden", !upload);
-  $("path-box").classList.toggle("hidden", upload);
+  const m = $("mode").value;
+  $("upload-box").classList.toggle("hidden", m !== "upload");
+  $("path-box").classList.toggle("hidden", m !== "path");
+  $("url-box").classList.toggle("hidden", m !== "url");
 });
 
 function currentTarget() {
@@ -685,8 +698,11 @@ $("learn-btn").addEventListener("click", async () => {
   fd.append("expert", expert);
   if (global) fd.append("global_brain", "true");
   if ($("sync").checked) fd.append("sync_flag", "true");
-  if ($("mode").value === "path") {
+  const m = $("mode").value;
+  if (m === "path") {
     fd.append("path", $("path").value);
+  } else if (m === "url") {
+    fd.append("url", $("url").value);
   } else {
     for (const f of $("files").files) fd.append("files", f);
   }

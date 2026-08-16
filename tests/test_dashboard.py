@@ -201,3 +201,28 @@ def test_token_generated_and_persisted():
     assert (dashboard.get_brain_root() / ".dashboard_token").exists()
 
 
+# --- learn por URL -----------------------------------------------------------
+
+def test_learn_url_endpoint(client, monkeypatch):
+    _login(client)
+    from brain_tool import brain_tool as core
+
+    monkeypatch.setattr(core, "_fetch_url", lambda url: "conteudo da url")
+    r = client.post(
+        "/api/learn",
+        data={"expert": "maria", "sync_flag": "true", "url": "https://example.com/x"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["target"] == "maria"
+    jobs = client.get("/api/jobs", params={"expert": "maria"}).json()["jobs"]
+    assert any(j["status"] == "completed" for j in jobs)
+
+
+def test_learn_url_rejected_private(client):
+    _login(client)
+    # sem monkeypatch: URL para loopback é bloqueada (anti-SSRF) → 400
+    r = client.post("/api/learn", data={"expert": "maria", "url": "http://127.0.0.1:1/x"})
+    assert r.status_code == 400
+
+
+

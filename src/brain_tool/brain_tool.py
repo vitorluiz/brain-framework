@@ -9,9 +9,13 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import os
+import socket
 import sys
+import urllib.parse
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -221,6 +225,83 @@ def _chunk_text(text: str, size: int = DEFAULT_CHUNK_SIZE) -> List[str]:
     return chunks or [text]
 
 
+# --- Ingestão de URL (SSRF-safe) --------------------------------------------
+
+_URL_TIMEOUT = float(os.environ.get("BRAIN_DASHBOARD_URL_TIMEOUT", "15"))
+_URL_MAX_BYTES = int(os.environ.get("BRAIN_DASHBOARD_MAX_URL_BYTES", str(10 * 1024 * 1024)))
+
+_PRIVATE_NETS = [
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.0.0.0/24"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("198.18.0.0/15"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+]
+
+
+def _allow_private_urls() -> bool:
+    return os.environ.get("BRAIN_DASHBOARD_ALLOW_PRIVATE_URLS", "") in ("1", "true", "yes")
+
+
+def _host_is_private(host: str) -> bool:
+    """True se o host resolve para IP privado/loopback/link-local (bloqueio SSRF)."""
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        raise ValueError(f"host nao resolve: {host}")
+    for info in infos:
+        addr = info[4][0]
+        ip = ipaddress.ip_address(addr)
+        if any(ip in net for net in _PRIVATE_NETS):
+            return True
+    return False
+
+
+class _ValidatingRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = urllib.parse.urlparse(newurl)
+        if new.scheme not in ("http", "https"):
+            raise ValueError("redirecionamento para esquema nao suportado")
+        if not new.hostname:
+            raise ValueError("redirecionamento sem host")
+        if not _allow_private_urls() and _host_is_private(new.hostname):
+            raise ValueError("redirecionamento para rede interna/loopback bloqueado")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _fetch_url(url: str) -> str:
+    """Busca conteúdo textual de uma URL (http/https) com proteção anti-SSRF.
+
+    Bloqueia IPs privados/loopback/link-local por padrão; libere explicitamente
+    com BRAIN_DASHBOARD_ALLOW_PRIVATE_URLS=1 (ex.: docs internos na LAN).
+    """
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"esquema nao suportado: {parsed.scheme or '(ausente)'}")
+    if not parsed.hostname:
+        raise ValueError("URL sem host")
+    if not _allow_private_urls() and _host_is_private(parsed.hostname):
+        raise ValueError(
+            "URL aponta para rede interna/loopback — bloqueado por segurança "
+            "(use BRAIN_DASHBOARD_ALLOW_PRIVATE_URLS=1 para permitir)"
+        )
+    opener = urllib.request.build_opener(_ValidatingRedirectHandler())
+    req = urllib.request.Request(url, headers={"User-Agent": "brain-framework"})
+    with opener.open(req, timeout=_URL_TIMEOUT) as resp:
+        content = resp.read(_URL_MAX_BYTES + 1)
+        if len(content) > _URL_MAX_BYTES:
+            raise ValueError(f"conteudo da URL excede {_URL_MAX_BYTES // (1024 * 1024)}MB")
+        charset = resp.headers.get_content_charset() or "utf-8"
+        return content.decode(charset, errors="replace")
+
+
 def _new_job(conn, expert, command, metadata=None) -> str:
     raw = f"{expert}:{command}:{datetime.now().isoformat()}"
     job_id = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
@@ -285,6 +366,44 @@ def _learn_file_into_staging(conn, expert, file_path, sync_immediately=False, dr
     return result
 
 
+def _learn_url_into_staging(conn, expert, url, sync_immediately=False, dry_run=False):
+    content = _fetch_url(url)
+    chunks = _chunk_text(content)
+    hashes = [generate_canonical_hash(c) for c in chunks]
+    if dry_run:
+        return {
+            "action": "learn (dry-run)",
+            "expert": expert,
+            "url": url,
+            "content_length": len(content),
+            "chunks": len(chunks),
+            "hashes": hashes,
+            "would_add_to_staging": True,
+            "sync_immediately": sync_immediately,
+        }
+    staging_ids = []
+    for chunk in chunks:
+        s = KnowledgeStaging(expert=expert, chunk_data=chunk,
+                             hash_canonical=generate_canonical_hash(chunk))
+        conn.add(s)
+        conn.flush()
+        staging_ids.append(s.id)
+    conn.commit()
+    result = {
+        "action": "learn",
+        "expert": expert,
+        "url": url,
+        "staging_ids": staging_ids,
+        "chunks": len(chunks),
+        "hashes": hashes,
+        "content_length": len(content),
+        "status": "pending",
+    }
+    if sync_immediately:
+        result["sync"] = sync(conn, expert)
+    return result
+
+
 def learn_directory(conn, expert, dir_path, sync_immediately=False, dry_run=False):
     path = Path(dir_path)
     if not path.exists() or not path.is_dir():
@@ -303,6 +422,9 @@ def learn_directory(conn, expert, dir_path, sync_immediately=False, dry_run=Fals
 
 def _ingest(conn, expert, path, sync_immediately=False):
     """Executa a ingestão (sem rastreamento de job) — usado no sync e no worker."""
+    s = str(path)
+    if s.startswith(("http://", "https://")):
+        return _learn_url_into_staging(conn, expert, s, sync_immediately)
     p = Path(path)
     if p.is_dir():
         results = learn_directory(conn, expert, path, sync_immediately)
@@ -326,14 +448,18 @@ def _async_enabled() -> bool:
 
 
 def learn(conn, expert, file_path, sync_immediately=False, dry_run=False):
-    """Ingere um arquivo/diretório no staging (spec §4.2).
+    """Ingere arquivo/diretório/URL no staging (spec §4.2).
 
     Assíncrono (Celery/Redis) quando o broker está configurado; caso contrário,
     fallback síncrono (spec §4.6).
     """
-    path = Path(file_path)
+    s = str(file_path)
+    is_url = s.startswith(("http://", "https://"))
 
     if dry_run:
+        if is_url:
+            return _learn_url_into_staging(conn, expert, s, sync_immediately, dry_run=True)
+        path = Path(file_path)
         if path.is_dir():
             results = learn_directory(conn, expert, file_path, sync_immediately, dry_run=True)
             return {"action": "learn (dry-run)", "expert": expert, "path": file_path,
