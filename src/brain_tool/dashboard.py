@@ -26,7 +26,9 @@ import hmac
 import json
 import os
 import secrets
+import signal
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -43,7 +45,8 @@ from .db import get_brain_root, get_session, validate_expert_identifier
 
 __all__ = [
     "add_dashboard_user", "list_dashboard_users", "remove_dashboard_user",
-    "authenticate", "create_app", "serve", "main",
+    "authenticate", "get_access_token", "create_app", "serve",
+    "stop_dashboard", "dashboard_status", "main",
 ]
 
 DEFAULT_HOST = "127.0.0.1"
@@ -572,21 +575,102 @@ def create_app(secret: Optional[str] = None, token: Optional[str] = None) -> Fas
     return app
 
 
-def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> int:
-    import uvicorn
+def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, foreground: bool = False) -> int:
+    """Sobe o dashboard. Por padrão roda em background (não bloqueia o terminal);
+    use foreground=True (ou `--foreground`) para bloquear (debug/dev)."""
+    if foreground:
+        return _run_server(host, port)
+    return _start_detached(host, port)
 
-    access_token = _load_or_create_token()
+
+def _print_banner(token: str, host: str, port: int) -> None:
     print("\n=== Brain Dashboard ===")
-    print(f"  Token de acesso: {access_token}")
-    print(f"  Local:  http://127.0.0.1:{port}/?token={access_token}")
+    print(f"  Token de acesso: {token}")
+    print(f"  Local:  http://127.0.0.1:{port}/?token={token}")
     if host not in ("127.0.0.1", "localhost", "::1"):
         lan = _lan_ip()
         if lan:
-            print(f"  LAN:    http://{lan}:{port}/?token={access_token}")
+            print(f"  LAN:    http://{lan}:{port}/?token={token}")
     print("  (login por usuário/senha continua disponível, se configurado)")
+
+
+def _run_server(host: str, port: int) -> int:
+    import uvicorn
+
+    access_token = _load_or_create_token()
+    _print_banner(access_token, host, port)
     print()
     uvicorn.run(create_app(), host=host, port=port, log_level="info")
     return 0
+
+
+def _pid_file() -> Path:
+    return get_brain_root() / ".dashboard.pid"
+
+
+def _log_file() -> Path:
+    return get_brain_root() / ".dashboard.log"
+
+
+def _start_detached(host: str, port: int) -> int:
+    """Inicia o servidor em background (sessão nova), grava PID e devolve o terminal."""
+    token = _load_or_create_token()
+    log_path = _log_file()
+    log_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    logf = open(log_path, "a")
+    cmd = [sys.executable, "-m", "brain_tool.dashboard",
+           "--host", host, "--port", str(port), "--foreground"]
+    kwargs = {"stdout": logf, "stderr": subprocess.STDOUT,
+              "stdin": subprocess.DEVNULL, "close_fds": True}
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        kwargs["start_new_session"] = True
+    proc = subprocess.Popen(cmd, **kwargs)
+    _pid_file().write_text(str(proc.pid))
+    _print_banner(token, host, port)
+    print(f"  Rodando em background (PID {proc.pid}).")
+    print(f"  Log:    {log_path}")
+    print("  Parar:  brain dashboard stop")
+    print()
+    return 0
+
+
+def stop_dashboard() -> bool:
+    """Encerra o dashboard em background (via PID file). Retorna True se parou algo."""
+    pid_path = _pid_file()
+    if not pid_path.exists():
+        return False
+    try:
+        pid = int(pid_path.read_text(encoding="utf-8").strip())
+    except (ValueError, OSError):
+        pid_path.unlink(missing_ok=True)
+        return False
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pid_path.unlink(missing_ok=True)
+        return False
+    except PermissionError:
+        return False
+    pid_path.unlink(missing_ok=True)
+    return True
+
+
+def dashboard_status() -> dict:
+    """Estado do dashboard em background (running/pid), sem efeito colateral."""
+    pid_path = _pid_file()
+    if not pid_path.exists():
+        return {"running": False}
+    try:
+        pid = int(pid_path.read_text(encoding="utf-8").strip())
+    except (ValueError, OSError):
+        return {"running": False}
+    try:
+        os.kill(pid, 0)
+        return {"running": True, "pid": pid}
+    except (ProcessLookupError, PermissionError):
+        return {"running": False}
 
 
 def main() -> int:
@@ -596,8 +680,10 @@ def main() -> int:
     parser.add_argument("--host", default=os.environ.get("BRAIN_DASHBOARD_HOST", DEFAULT_HOST))
     parser.add_argument("--port", type=int,
                         default=int(os.environ.get("BRAIN_DASHBOARD_PORT", str(DEFAULT_PORT))))
+    parser.add_argument("--foreground", action="store_true",
+                        help="roda em primeiro plano (bloqueia o terminal)")
     args = parser.parse_args()
-    return serve(host=args.host, port=args.port)
+    return serve(host=args.host, port=args.port, foreground=args.foreground)
 
 
 # --- UI (HTML autocontido) --------------------------------------------------
@@ -908,3 +994,7 @@ setInterval(() => { if (!$("app-view").classList.contains("hidden")) loadStatus(
 </body>
 </html>
 """
+
+
+if __name__ == "__main__":
+    sys.exit(main())

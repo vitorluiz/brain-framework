@@ -987,13 +987,14 @@ def _load_dashboard():
 
 
 def cmd_dashboard_serve(args) -> int:
-    """Sobe o dashboard web (spec §6.3)."""
+    """Sobe o dashboard web (spec §6.3) — background por padrão."""
     dash = _load_dashboard()
     if dash is None:
         return 1
     host = getattr(args, "host", "127.0.0.1")
     port = getattr(args, "port", 8611)
-    return dash.serve(host=host, port=port)
+    foreground = getattr(args, "foreground", False)
+    return dash.serve(host=host, port=port, foreground=foreground)
 
 
 def cmd_dashboard_add_user(args) -> int:
@@ -1039,6 +1040,31 @@ def cmd_dashboard_token(args) -> int:
     if dash is None:
         return 1
     print(dash.get_access_token())
+    return 0
+
+
+def cmd_dashboard_stop(args) -> int:
+    """Encerra o dashboard em background."""
+    dash = _load_dashboard()
+    if dash is None:
+        return 1
+    if dash.stop_dashboard():
+        print("+ Dashboard encerrado.")
+    else:
+        print("Dashboard nao esta rodando (sem PID).")
+    return 0
+
+
+def cmd_dashboard_status(args) -> int:
+    """Verifica se o dashboard está rodando em background."""
+    dash = _load_dashboard()
+    if dash is None:
+        return 1
+    st = dash.dashboard_status()
+    if st.get("running"):
+        print(f"Dashboard rodando (PID {st['pid']}).")
+    else:
+        print("Dashboard nao esta rodando.")
     return 0
 
 
@@ -1155,11 +1181,15 @@ Para conhecer mais:
     p_dash.add_argument('--host', default='127.0.0.1',
                         help='Host de bind (default 127.0.0.1; use 0.0.0.0 para LAN)')
     p_dash.add_argument('--port', type=int, default=8611, help='Porta (default 8611)')
+    p_dash.add_argument('--foreground', action='store_true',
+                        help='Roda em primeiro plano (default: background)')
     p_dash_sub = p_dash.add_subparsers(dest='subcommand')
 
     p_dash_serve = p_dash_sub.add_parser('serve', help='Sobe o dashboard web')
     p_dash_serve.add_argument('--host', default='127.0.0.1', help='Host (default 127.0.0.1)')
     p_dash_serve.add_argument('--port', type=int, default=8611, help='Porta (default 8611)')
+    p_dash_serve.add_argument('--foreground', action='store_true',
+                              help='Roda em primeiro plano (bloqueia o terminal)')
     p_dash_serve.set_defaults(func=lambda args: cmd_dashboard_serve(args))
 
     p_dash_add = p_dash_sub.add_parser('add-user', help='Adiciona usuario do dashboard')
@@ -1173,6 +1203,12 @@ Para conhecer mais:
     p_dash_remove = p_dash_sub.add_parser('remove-user', help='Remove usuario do dashboard')
     p_dash_remove.add_argument('username', help='Nome de usuario')
     p_dash_remove.set_defaults(func=lambda args: cmd_dashboard_remove_user(args))
+
+    p_dash_stop = p_dash_sub.add_parser('stop', help='Encerra o dashboard em background')
+    p_dash_stop.set_defaults(func=lambda args: cmd_dashboard_stop(args))
+
+    p_dash_status = p_dash_sub.add_parser('status', help='Verifica se o dashboard está rodando')
+    p_dash_status.set_defaults(func=lambda args: cmd_dashboard_status(args))
 
     p_dash_token = p_dash_sub.add_parser('token', help='Exibe o token de acesso atual')
     p_dash_token.set_defaults(func=lambda args: cmd_dashboard_token(args))

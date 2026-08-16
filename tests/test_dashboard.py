@@ -263,6 +263,17 @@ def test_get_access_token_returns_persisted():
     assert dashboard.get_access_token() == dashboard._load_or_create_token()
 
 
+# --- background (detached) ---------------------------------------------------
+
+def test_dashboard_status_not_running():
+    assert dashboard.dashboard_status() == {"running": False}
+
+
+def test_stop_dashboard_no_pid():
+    assert dashboard.stop_dashboard() is False
+
+
+
 
 
 
