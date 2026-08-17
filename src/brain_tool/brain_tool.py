@@ -36,7 +36,7 @@ from .models import Job, KnowledgeStaging, Page
 
 from .auth import require_admin
 
-__version__ = "1.2.0"
+__version__ = "1.0.0"
 
 
 def generate_canonical_hash(content: str) -> str:

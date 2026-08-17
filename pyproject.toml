@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "brain-framework"
-version = "1.2.0"
+version = "1.0.0"
 description = "Framework de gestão de conhecimento (brain.db) para experts do Hermes Agent"
 readme = "README.md"
 license = {text = "MIT"}

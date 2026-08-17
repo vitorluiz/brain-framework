@@ -49,7 +49,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 
 SCHEMA_VERSION = "1.0.0"
-__version__ = "1.2.0"
+__version__ = "1.0.0"
 
 # === Importação do brain_tool (CLI core de manipulação de conhecimento) ===
 from brain_tool import (
