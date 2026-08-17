@@ -26,11 +26,10 @@ O Brain Framework é um sistema de gestão de conhecimento para agentes de IA, c
 ~/.hermes/brain/
 ├── global/
 │   └── brain.db          # Conhecimento compartilhado
-├── experts/
-│   ├── maria/
-│   │   └── brain.db      # Conhecimento específico de Maria
-│   └── jose/
-│       └── brain.db      # Conhecimento específico de José
+├── maria/
+│   └── brain.db          # Conhecimento específico de Maria
+├── jose/
+│   └── brain.db          # Conhecimento específico de José
 └── admins.json           # Lista de administradores
 ```
 
@@ -177,11 +176,11 @@ brain_tool.py jobs --expert <expert> [--status <status>] [--limit <n>] [--global
 
 ---
 
-## 4. Comandos do Celebro (CLI do Gestor)
+## 4. Comandos do Brain (CLI do Gestor)
 
 ### 4.1 `add profile` — Criar novo expert
 ```
-celebro add profile <name>
+brain add profile <name>
 ```
 O que faz:
 1. Tenta executar `hermes profile create <name>` (se hermes CLI disponível)
@@ -191,14 +190,14 @@ O que faz:
 
 ### 4.2 `list profiles` — Listar experts
 ```
-celebro list profiles
+brain list profiles
 ```
-- Lista todos os diretórios em `experts/`
+- Lista todas as pastas de expert na raiz do brain (`~/.hermes/brain/`)
 - Mostra status (existe/não existe) e contagem de conhecimentos
 
 ### 4.3 `remove profile` — Remover expert
 ```
-celebro remove profile <name>
+brain remove profile <name>
 ```
 - Remove brain.db
 - Remove diretório do expert
@@ -206,15 +205,15 @@ celebro remove profile <name>
 
 ### 4.4 `global learn` — Popular knowledge global
 ```
-celebro global learn --path <caminho> [--sync] [--dry-run]
-celebro global learn --content <texto> --title <titulo> [--dry-run]
+brain global learn --path <caminho> [--sync] [--dry-run]
+brain global learn --content <texto> --title <titulo> [--dry-run]
 ```
 - Funciona como `brain_tool learn` mas para o global brain
 - **Admin**: requerido (já é CLI, então quem tem acesso ao servidor é admin)
 
 ### 4.5 `backup` — Backup de todos os brains
 ```
-celebro backup
+brain backup
 ```
 - Cria diretório de backup com timestamp
 - Copia brain.db de global + todos os experts
@@ -222,25 +221,25 @@ celebro backup
 
 ### 4.6 `update` — Atualizar framework
 ```
-celebro update
+brain update
 ```
 - Executa `git pull origin main` no diretório do framework
 - Only atualiza código, não brains
 
 ### 4.7 `sync all` — Sync todos os brains
 ```
-celebro sync all
+brain sync all
 ```
 - Executa `brain_tool sync` para global + todos os experts
 - Mostra status por expert
 
 ### 4.8 `admin` — Gestão de administradores
 ```
-celebro admin list
-celebro admin add whatsapp <numero>
-celebro admin add cli <username>
-celebro admin add grupo <grupo> <membro>
-celebro admin remove <identificador>
+brain admin list
+brain admin add whatsapp <numero>
+brain admin add cli <username>
+brain admin add grupo <grupo> <membro>
+brain admin remove <identificador>
 ```
 - Admins armazenados em `~/.hermes/brain/admins.json`
 - Tipos: `whatsapp`, `cli`, `grupo`
@@ -257,14 +256,14 @@ celebro admin remove <identificador>
 │  - Conecta ao WhatsApp (API oficial ou não oficial)       │
 │  - Gerencia sessões, mensagens, admin list               │
 │  - Recebe comandos /admin learn, valida admin,            │
-│    chama brain_tool ou celebro para processar             │
+│    chama brain_tool ou brain para processar             │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                 BRAIN FRAMEWORK (CLI/celebro)             │
+│                 BRAIN FRAMEWORK (CLI/brain)             │
 │  - brain_tool.py: manipula brain.db                      │
-│  - celebro: gestor do sistema                            │
+│  - brain: gestor do sistema                            │
 │  - Não sabe de WhatsApp — só processa comandos            │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -300,7 +299,7 @@ Maria: "A empresa funciona de segunda a sexta, das 8h às 18h."
 4. **WhatsApp admin apenas em grupo administrativo**
 
 ### 6.2 Validação de Admin no WhatsApp
-- Lista de admins configurada via `celebro admin add`
+- Lista de admins configurada via `brain admin add`
 - Admin deve ser: (1) na lista, (2) membro do grupo, (3) admin do grupo
 - Se falhar qualquer critério → comando ignorado com mensagem "Comando restrito a administradores"
 
@@ -340,7 +339,7 @@ Maria: "A empresa funciona de segunda a sexta, das 8h às 18h."
 - `synthesize` para visão geral do conhecimento
 
 ### 8.3 Backup & Restore
-- `celebro backup` cria backup completo
+- `brain backup` cria backup completo
 - Restore: futuro (copiar brain.db de volta manualmente pelo momento)
 
 ---
@@ -356,7 +355,7 @@ Maria: "A empresa funciona de segunda a sexta, das 8h às 18h."
 ### 9.2 Non-Goals (v1)
 - Dashboard: cockpit para admins (pode ser futuro)
 - WhatsApp API: managed pelo Hermes gateway, não pelo brain framework
-- Múltiplos LLMs: cada agent pode usar seu provider (celebro é agnóstico)
+- Múltiplos LLMs: cada agent pode usar seu provider (brain é agnóstico)
 
 ---
 
@@ -365,12 +364,12 @@ Maria: "A empresa funciona de segunda a sexta, das 8h às 18h."
 ### 10.1 Setup Inicial
 ```bash
 # Criar experts
-celebro add profile maria
-celebro add profile jose
+brain add profile maria
+brain add profile jose
 
 # Popular global (horários, políticas)
-celebro global learn --content "Horário de funcionamento: 8h-18h" --title "Horário"
-celebro global learn --path /documentos/gerais/ --sync
+brain global learn --content "Horário de funcionamento: 8h-18h" --title "Horário"
+brain global learn --path /documentos/gerais/ --sync
 
 # Popular conhecimento específico
 brain_tool.py learn --expert maria --path /documentos/atendimento/ --sync

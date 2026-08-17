@@ -1,0 +1,40 @@
+services:
+  # Broker de mensagens para o Celery (spec §4 — async processing).
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: ["redis-server", "--appendonly", "yes"]
+
+  # Banco compartilhado para modo organização (spec §1 — escala; optional).
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: brain
+      POSTGRES_PASSWORD: brain
+      POSTGRES_DB: brain
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+
+  # Worker Celery — processa learn/sync assíncronos.
+  worker:
+    build: .
+    command: brain-worker
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      DATABASE_URL: postgresql+psycopg://brain:brain@postgres:5432/brain
+    depends_on:
+      - redis
+      - postgres
+    volumes:
+      # Monte aqui os arquivos a serem ingeridos (passe /ingest/<arquivo> no learn).
+      - ./ingest:/ingest
+
+volumes:
+  redis-data:
+  pg-data:
