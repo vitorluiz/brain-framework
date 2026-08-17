@@ -120,6 +120,8 @@ brain restore --list  # lista backups disponíveis
 brain restore --from <ts> [--expert <n> | --global] [--yes]   # restaura de um backup
 brain update          # git pull origin main no diretório do framework
 brain sync all        # sync (staging → pages) de global + todos os experts
+brain verify          # integridade dos checkpoints assinados (todos os scopes)
+brain log --scope S   # histórico de commits (global ou expert/<nome>)
 ```
 
 O `restore` localiza o backup pelo timestamp (ou caminho do diretório), copia os
@@ -196,6 +198,28 @@ O `learn` registra um job em `jobs` com ciclo `enqueued → processing → compl
 (ou `failed`). Com Celery + Redis configurados (`REDIS_URL`/`CELERY_BROKER_URL`),
 a ingestão roda **assíncrona** no worker; sem broker, roda **síncrona** no
 próprio processo (fallback — spec §4.6).
+
+---
+
+## Checkpoints assinados (governança — Fase 1)
+
+Toda escrita (`remember`, `forget`, `sync`) cria um **commit assinado** (Ed25519)
+e avança a ref `main` do scope (`global` ou `expert/<nome>`). A chave é gerada
+automaticamente no primeiro uso em `$BRAIN_ROOT/.signing/` (ou injetada via
+`BRAIN_SIGNING_KEY` / `BRAIN_SIGNING_KEY_PUB`).
+
+```bash
+brain verify [--scope global|expert/<nome>]   # valida cadeia + assinaturas + conteúdo
+brain log --scope expert/maria               # histórico de commits (mais novo primeiro)
+```
+
+`verify` detecta adulteração (conteúdo, campos do commit, assinatura); `check`
+também recalcula o `hash_canonical` das páginas legadas (ponte). Páginas
+migradas de antes dos checkpoints entram como commit *genesis* com
+`integrity: unverified` — não há garantia retroativa sobre dados antigos.
+
+> Design completo e fases: `plan/checkpoints-assinados.md`. Aprovação explícita
+> (`approve`/`diff`/`rollback`) é a Fase 2.
 
 ---
 

@@ -29,6 +29,8 @@ Uso:
   brain global learn --path ...- Aprende conhecimento global
   brain backup                 - Backup de todos os brains
   brain restore --from <ts>    - Restaura brains de um backup
+  brain verify                 - Verifica integridade dos checkpoints assinados
+  brain log --scope ...        - Histórico de commits de um scope
   brain update                  - Atualiza framework
   brain sync all               - Sync de todos os brains
   brain admin list             - Lista administradores
@@ -62,6 +64,7 @@ from brain_tool.auth import (
     admin_config_file, load_admins, save_admins, is_admin, is_group_member,
 )
 from brain_tool.db import dispose_engine_for_path
+from brain_tool.checkpoints import verify_scope, history
 
 # === (fallback sqlite3 legado descontinuado — brain_tool sempre importável) ===
 if False:
@@ -1109,6 +1112,72 @@ def cmd_restore(args) -> int:
     return 0 if results else 1
 
 
+def _open_scope_session(scope: str):
+    """Abre uma Session para um scope (`global` ou `expert/<nome>`)."""
+    if scope == "global":
+        bp = get_brain_db_path(global_brain=True)
+    elif scope.startswith("expert/"):
+        bp = get_brain_db_path(expert=scope[len("expert/"):])
+    else:
+        raise ValueError(f"scope invalido: {scope} (use 'global' ou 'expert/<nome>')")
+    if not os.path.exists(bp):
+        return None
+    return get_db_connection(bp)
+
+
+def cmd_verify(args) -> int:
+    """Verifica integridade dos checkpoints assinados (cadeia + assinaturas)."""
+    if getattr(args, "scope", None):
+        scopes = [args.scope]
+    else:
+        scopes = ["global"] + [f"expert/{n}" for n in get_expert_names()]
+
+    print("\n=== Brain: Verify (checkpoints assinados) ===")
+    all_ok = True
+    for scope in scopes:
+        conn = _open_scope_session(scope)
+        if conn is None:
+            print(f"  [skip] {scope}: sem brain.db")
+            continue
+        try:
+            result = verify_scope(conn, scope)
+        finally:
+            conn.close()
+        if result.get("ok"):
+            print(f"  [OK] {scope} — {result['commits']} commits")
+        else:
+            all_ok = False
+            print(f"  [FALHOU] {scope} — {result['commits']} commits")
+        for issue in result.get("issues", []):
+            print(f"      ! {issue}")
+        if "note" in result:
+            print(f"      ({result['note']})")
+    print(f"\n= Verify concluido: {'OK' if all_ok else 'FALHAS ENCONTRADAS'}")
+    return 0 if all_ok else 1
+
+
+def cmd_log(args) -> int:
+    """Histórico de commits de um scope (mais novo primeiro)."""
+    scope = args.scope
+    conn = _open_scope_session(scope)
+    if conn is None:
+        print(f"Scope {scope} sem brain.db.", file=sys.stderr)
+        return 1
+    try:
+        entries = history(conn, scope)
+    finally:
+        conn.close()
+
+    print(f"\n=== Histórico de commits — {scope} ===")
+    if not entries:
+        print("  (nenhum commit)")
+        return 0
+    for e in entries:
+        title = e["message"] or e["policy"]
+        print(f"  {e['created_at']}  {e['id'][:12]}  {e['author']}  {title}")
+    return 0
+
+
 def cmd_update(args) -> int:
     """Atualiza o Brain Framework via git pull."""
     print(f"\n=== Brain: Atualizando framework ===")
@@ -1508,6 +1577,8 @@ Comandos de Gestão:
   global learn         - Aprende conhecimento para o brain global
   backup               - Backup de todos os brains (global + experts)
   restore --from TS    - Restaura brains de um backup (--list lista backups)
+  verify [--scope S]   - Verifica integridade dos checkpoints assinados
+  log --scope S        - Histórico de commits (global ou expert/<nome>)
   update               - Atualiza o framework via git pull origin main
   sync all             - Faz sync de todos os brains
   admin list           - Lista administradores configurados
@@ -1582,6 +1653,14 @@ Para conhecer mais:
     p_restore.add_argument('--list', action='store_true', dest='list_backups',
                            help='Lista os backups disponiveis e sai')
     p_restore.set_defaults(func=lambda args: cmd_restore(args))
+
+    p_verify = sp.add_parser('verify', help='Verifica integridade dos checkpoints assinados')
+    p_verify.add_argument('--scope', help='Scope a verificar (global ou expert/<nome>); default: todos')
+    p_verify.set_defaults(func=lambda args: cmd_verify(args))
+
+    p_log = sp.add_parser('log', help='Histórico de commits de um scope')
+    p_log.add_argument('--scope', required=True, help='Scope (global ou expert/<nome>)')
+    p_log.set_defaults(func=lambda args: cmd_log(args))
 
     p_update = sp.add_parser('update', help='Atualiza o framework')
     p_update.set_defaults(func=lambda args: cmd_update(args))
