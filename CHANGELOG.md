@@ -110,3 +110,12 @@ e o versionamento segue [SemVer](https://semver.org/lang/pt-BR/).
 > **Design de governança**: o modelo de checkpoints assinados (fases, modelo de
 > dados, fluxo e decisões aprovadas) está em
 > [`plan/checkpoints-assinados.md`](plan/checkpoints-assinados.md).
+
+## [1.0.0] - 2026-08-17
+
+Primeiro release (pré-lançamento) consolidando as Fases 1–4 de checkpoints
+assinados, hardening do worker Celery/Redis, plugin Hermes nativo, dashboard
+e testes de integração real. Veja as seções "Adicionado" e "Segurança" acima
+para os detalhes completos.
+
+---
