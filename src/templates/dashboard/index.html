@@ -1,0 +1,459 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Brain Dashboard</title>
+<style>
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+       background: #0f1115; color: #e6e8eb; }
+#login-view { max-width: 360px; margin: 12vh auto 0; padding: 24px; }
+#login-view h1 { font-size: 1.4rem; margin: 0 0 16px; }
+input, select, button, textarea { font-size: 0.95rem; padding: 8px 10px; border-radius: 6px;
+       border: 1px solid #2a2e37; background: #181b22; color: #e6e8eb; width: 100%; }
+textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; resize: vertical; }
+button { cursor: pointer; background: #2f6feb; border-color: #2f6feb; font-weight: 600; }
+button:hover { background: #3b7cff; }
+button.secondary { background: #22262f; border-color: #2a2e37; }
+header { display: flex; align-items: center; gap: 12px; padding: 12px 20px;
+         border-bottom: 1px solid #22262f; }
+header h1 { font-size: 1.1rem; margin: 0; flex: 1; }
+main { padding: 20px; max-width: 960px; margin: 0 auto; }
+section { background: #14171d; border: 1px solid #22262f; border-radius: 10px;
+          padding: 16px; margin-bottom: 16px; }
+section h2 { margin: 0 0 12px; font-size: 1rem; color: #9aa4b2; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+.row > * { flex: 1 1 200px; }
+label { display: block; font-size: 0.8rem; color: #9aa4b2; margin: 8px 0 4px; }
+table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #22262f; }
+th { color: #9aa4b2; font-weight: 600; }
+.status-enqueued { color: #f0b429; }
+.status-processing { color: #58a6ff; }
+.status-completed { color: #3fb950; }
+.status-failed { color: #f85149; }
+pre { background: #0c0e12; padding: 10px; border-radius: 6px; overflow: auto;
+      font-size: 0.8rem; max-height: 240px; }
+.hidden { display: none; }
+.muted { color: #6e7681; font-size: 0.8rem; }
+#login-error { color: #f85149; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div id="login-view">
+  <form id="login-form">
+    <h1>Brain Dashboard</h1>
+    <label>Usuário</label>
+    <input name="username" autocomplete="username" required>
+    <label>Senha</label>
+    <input name="password" type="password" autocomplete="current-password" required>
+    <p id="login-error"></p>
+    <button type="submit">Entrar</button>
+    <hr style="margin:16px 0;border-color:#22262f">
+    <p class="muted" style="margin:0 0 8px">Ou use o token de acesso (<code>brain dashboard token</code>):</p>
+    <label>Token</label>
+    <input id="token-input" placeholder="cole o token aqui">
+    <button type="button" id="token-login-btn" style="margin-top:8px">Entrar com token</button>
+  </form>
+</div>
+
+<div id="app-view" class="hidden">
+  <header>
+    <h1>Brain Dashboard</h1>
+    <span id="who" class="muted"></span>
+    <button class="secondary" id="logout" style="width:auto">Sair</button>
+  </header>
+  <main>
+    <section>
+      <h2>Aprender (learn)</h2>
+      <div class="row">
+        <div>
+          <label>Alvo</label>
+          <select id="target"></select>
+        </div>
+        <div>
+          <label>Modo</label>
+          <select id="mode">
+            <option value="upload">Upload de arquivos</option>
+            <option value="path">Caminho no servidor</option>
+            <option value="url">URL</option>
+          </select>
+        </div>
+      </div>
+      <div id="upload-box">
+        <label>Arquivos (.txt .md .pdf .docx .xlsx .csv)</label>
+        <input type="file" id="files" multiple>
+      </div>
+      <div id="path-box" class="hidden">
+        <label>Caminho no servidor (arquivo ou diretório)</label>
+        <input type="text" id="path" placeholder="/caminho/absoluto">
+      </div>
+      <div id="url-box" class="hidden">
+        <label>URL (http/https)</label>
+        <input type="text" id="url" placeholder="https://exemplo.com/doc">
+      </div>
+      <label style="margin-top:10px">
+        <input type="checkbox" id="sync" checked style="width:auto"> Sincronizar imediatamente (sync)
+      </label>
+      <button id="learn-btn" style="margin-top:12px">Executar learn</button>
+      <pre id="learn-result" class="hidden"></pre>
+    </section>
+
+    <section>
+      <h2>Jobs</h2>
+      <div class="row">
+        <button class="secondary" id="refresh-jobs" style="width:auto">Atualizar</button>
+        <span class="muted" id="jobs-meta"></span>
+      </div>
+      <table id="jobs-table">
+        <thead><tr>
+          <th>ID</th><th>Comando</th><th>Status</th><th>Criado</th>
+          <th>Concluído</th><th>Erro</th>
+        </tr></thead>
+        <tbody><tr><td colspan="6" class="muted">Nenhum job.</td></tr></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Integridade (check)</h2>
+      <button class="secondary" id="check-btn" style="width:auto">Verificar</button>
+      <pre id="check-result" class="hidden"></pre>
+    </section>
+
+    <section>
+      <h2>Status dos serviços</h2>
+      <div class="row">
+        <button class="secondary" id="refresh-status" style="width:auto">Atualizar</button>
+        <span class="muted" id="status-meta"></span>
+      </div>
+      <div id="status-box"><span class="muted">Carregando…</span></div>
+    </section>
+
+    <section>
+      <h2>Profiles — SOUL.md + Brain (LLM)</h2>
+      <div class="row">
+        <div>
+          <label>Profile / Expert</label>
+          <select id="profile-select"></select>
+        </div>
+        <div>
+          <button class="secondary" id="refresh-profile" style="width:auto">Recarregar</button>
+        </div>
+      </div>
+      <p id="profile-hint" class="muted hidden"></p>
+      <label>SOUL.md (persona)</label>
+      <textarea id="soul-editor" rows="9" placeholder="You are ... (persona do expert)"></textarea>
+      <button id="save-soul" style="margin-top:8px">Salvar SOUL.md</button>
+      <hr style="margin:16px 0;border-color:#22262f">
+      <label>Brain (LLM) — modelo padrão</label>
+      <div class="row">
+        <div>
+          <label>Modelo</label>
+          <input id="model-input" placeholder="hermes3:3b" list="ollama-models">
+          <datalist id="ollama-models"></datalist>
+        </div>
+        <div>
+          <label>Provider</label>
+          <input id="provider-input" placeholder="ollama">
+        </div>
+      </div>
+      <div>
+        <label>Base URL (opcional)</label>
+        <input id="base-url-input" placeholder="http://localhost:11434">
+      </div>
+      <label style="margin-top:10px">Fallback (usado quando o principal falha)</label>
+      <div class="row">
+        <div>
+          <label>Modelo fallback</label>
+          <input id="fallback-model-input" placeholder="deepseek-v4-pro">
+        </div>
+        <div>
+          <label>Provider fallback</label>
+          <input id="fallback-provider-input" placeholder="opencode-go">
+        </div>
+      </div>
+      <button id="save-model" style="margin-top:12px">Salvar Brain (LLM)</button>
+      <pre id="profile-result" class="hidden"></pre>
+    </section>
+  </main>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, opts);
+  if (r.status === 401) { showLogin(); throw new Error("nao autenticado"); }
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.detail || data.error || ("HTTP " + r.status));
+  return data;
+}
+
+function showLogin() { $("login-view").classList.remove("hidden"); $("app-view").classList.add("hidden"); }
+function showApp() { $("login-view").classList.add("hidden"); $("app-view").classList.remove("hidden"); }
+
+$("login-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  try {
+    const r = await fetch("/login", { method: "POST", body: fd });
+    const data = await r.json();
+    if (r.ok) { await boot(); }
+    else { $("login-error").textContent = data.error || "Login falhou"; }
+  } catch (err) { $("login-error").textContent = "Erro de conexão"; }
+});
+
+$("token-login-btn").addEventListener("click", async () => {
+  const token = $("token-input").value.trim();
+  if (!token) return;
+  try {
+    const r = await fetch("/login-token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token }),
+    });
+    if (r.ok) { await boot(); }
+    else {
+      const data = await r.json().catch(() => ({}));
+      $("login-error").textContent = data.error || data.detail || "Token inválido";
+    }
+  } catch (err) { $("login-error").textContent = "Erro de conexão"; }
+});
+
+$("logout").addEventListener("click", () => { location.href = "/logout"; });
+
+$("mode").addEventListener("change", () => {
+  const m = $("mode").value;
+  $("upload-box").classList.toggle("hidden", m !== "upload");
+  $("path-box").classList.toggle("hidden", m !== "path");
+  $("url-box").classList.toggle("hidden", m !== "url");
+});
+
+function currentTarget() {
+  const v = $("target").value;
+  return v === "global" ? { expert: "global", global: true } : { expert: v, global: false };
+}
+
+async function loadExperts() {
+  const data = await api("/api/experts");
+  const sel = $("target");
+  sel.innerHTML = "";
+  for (const e of data.experts) {
+    const o = document.createElement("option");
+    o.value = e.name;
+    o.textContent = e.global ? "global (compartilhado)"
+      : `${e.name} (${e.knowledge ?? "?"} conhecimentos)`;
+    sel.appendChild(o);
+  }
+}
+
+$("learn-btn").addEventListener("click", async () => {
+  const { expert, global } = currentTarget();
+  const fd = new FormData();
+  fd.append("expert", expert);
+  if (global) fd.append("global_brain", "true");
+  if ($("sync").checked) fd.append("sync_flag", "true");
+  const m = $("mode").value;
+  if (m === "path") {
+    fd.append("path", $("path").value);
+  } else if (m === "url") {
+    fd.append("url", $("url").value);
+  } else {
+    for (const f of $("files").files) fd.append("files", f);
+  }
+  $("learn-result").classList.remove("hidden");
+  $("learn-result").textContent = "Processando…";
+  try {
+    const data = await api("/api/learn", { method: "POST", body: fd });
+    $("learn-result").textContent = JSON.stringify(data, null, 2);
+    await loadJobs();
+  } catch (err) {
+    $("learn-result").textContent = "Erro: " + err.message;
+  }
+});
+
+async function loadJobs() {
+  const { expert, global } = currentTarget();
+  const q = new URLSearchParams({ expert });
+  if (global) q.set("global_brain", "true");
+  const data = await api("/api/jobs?" + q.toString());
+  const tbody = $("jobs-table").querySelector("tbody");
+  const jobs = data.jobs || [];
+  $("jobs-meta").textContent = jobs.length + " job(s)";
+  if (!jobs.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="muted">Nenhum job.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = jobs.map((j) => `
+    <tr>
+      <td>${j.id}</td><td>${j.command}</td>
+      <td class="status-${j.status}">${j.status}</td>
+      <td>${(j.created_at || "").replace("T", " ").slice(0, 19)}</td>
+      <td>${(j.completed_at || "").replace("T", " ").slice(0, 19)}</td>
+      <td>${j.error || ""}</td>
+    </tr>`).join("");
+}
+
+$("refresh-jobs").addEventListener("click", loadJobs);
+$("target").addEventListener("change", loadJobs);
+
+$("check-btn").addEventListener("click", async () => {
+  const { expert, global } = currentTarget();
+  const q = new URLSearchParams({ expert });
+  if (global) q.set("global_brain", "true");
+  $("check-result").classList.remove("hidden");
+  try {
+    const data = await api("/api/check?" + q.toString());
+    $("check-result").textContent = JSON.stringify(data, null, 2);
+  } catch (err) {
+    $("check-result").textContent = "Erro: " + err.message;
+  }
+});
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>\"']/g, (c) => ({'&':'&','<':'<','>':'>','\"':'"',"'":'''}[c]));
+}
+
+async function loadStatus() {
+  try {
+    const data = await api("/api/status");
+    $("status-box").innerHTML = ["redis", "celery", "docker"].map((k) => {
+      const s = data[k] || {};
+      const ok = !!s.ok;
+      return `<div style="margin:8px 0;padding:8px 10px;border:1px solid #22262f;border-radius:6px">
+        <strong>${k}</strong> <span class="status-${ok ? 'completed' : 'failed'}">${ok ? 'OK' : 'FALHA'}</span>
+        <div class="muted">${escapeHtml(s.detail || '')}</div>
+      </div>`;
+    }).join("");
+  } catch (err) {
+    $("status-box").innerHTML = `<p class="muted">Erro: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+$("refresh-status").addEventListener("click", loadStatus);
+
+// --- Profiles: SOUL.md + Brain (LLM) ---
+
+function showProfileResult(msg) {
+  const el = $("profile-result");
+  el.classList.remove("hidden");
+  el.textContent = msg;
+}
+
+async function loadProfiles() {
+  const data = await api("/api/profiles");
+  const sel = $("profile-select");
+  sel.innerHTML = "";
+  for (const p of data.profiles) {
+    const o = document.createElement("option");
+    o.value = p.name;
+    o.dataset.hermes = p.hermes_profile || "";
+    o.textContent = p.hermes_profile
+      ? `${p.name}  (hermes: ${p.hermes_profile})`
+      : `${p.name}  (sem profile hermes)`;
+    sel.appendChild(o);
+  }
+  if (data.profiles.length) await loadProfileConfig();
+}
+
+async function loadProfileConfig() {
+  const name = $("profile-select").value;
+  if (!name) return;
+  const opt = $("profile-select").selectedOptions[0];
+  const hasHermes = !!(opt && opt.dataset.hermes);
+  $("profile-hint").textContent = hasHermes
+    ? ""
+    : "Sem profile Hermes — crie com `brain add profile <nome>`.";
+  $("profile-hint").classList.toggle("hidden", hasHermes);
+  try {
+    const [soul, model] = await Promise.all([
+      api(`/api/profiles/${encodeURIComponent(name)}/soul`),
+      api(`/api/profiles/${encodeURIComponent(name)}/model`),
+    ]);
+    $("soul-editor").value = soul.soul || "";
+    $("model-input").value = model.model || "";
+    $("provider-input").value = model.provider || "";
+    $("base-url-input").value = model.base_url || "";
+    const fb = (model.fallback || [])[0] || {};
+    $("fallback-model-input").value = fb.model || "";
+    $("fallback-provider-input").value = fb.provider || "";
+    $("profile-result").classList.add("hidden");
+  } catch (err) {
+    showProfileResult("Erro: " + err.message);
+  }
+}
+
+$("profile-select").addEventListener("change", loadProfileConfig);
+$("refresh-profile").addEventListener("click", loadProfileConfig);
+
+$("save-soul").addEventListener("click", async () => {
+  const name = $("profile-select").value;
+  if (!name) return;
+  const fd = new FormData();
+  fd.append("content", $("soul-editor").value);
+  showProfileResult("Salvando SOUL.md…");
+  try {
+    await api(`/api/profiles/${encodeURIComponent(name)}/soul`, { method: "POST", body: fd });
+    showProfileResult("SOUL.md salvo ✓");
+  } catch (err) { showProfileResult("Erro: " + err.message); }
+});
+
+$("base-url-input").addEventListener("input", loadOllamaModels);
+
+$("save-model").addEventListener("click", async () => {
+  const name = $("profile-select").value;
+  if (!name) return;
+  const fd = new FormData();
+  fd.append("model", $("model-input").value.trim());
+  fd.append("provider", $("provider-input").value.trim());
+  fd.append("base_url", $("base-url-input").value.trim());
+  fd.append("fallback_model", $("fallback-model-input").value.trim());
+  fd.append("fallback_provider", $("fallback-provider-input").value.trim());
+  showProfileResult("Salvando Brain (LLM)…");
+  try {
+    await api(`/api/profiles/${encodeURIComponent(name)}/model`, { method: "POST", body: fd });
+    showProfileResult("Brain (LLM) salvo ✓");
+    await loadProfileConfig();
+  } catch (err) { showProfileResult("Erro: " + err.message); }
+});
+
+async function loadOllamaModels() {
+  const baseUrl = $("base-url-input").value.trim() || "http://localhost:11434";
+  try {
+    const data = await api(`/api/ollama/models?base_url=${encodeURIComponent(baseUrl)}`);
+    const datalist = $("ollama-models");
+    datalist.innerHTML = "";
+    for (const m of data.models || []) {
+      const opt = document.createElement("option");
+      opt.value = m;
+      datalist.appendChild(opt);
+    }
+  } catch (err) {
+    // silencioso - datalist vazio
+  }
+}
+
+async function boot() {
+  try {
+    const me = await api("/api/me");
+    $("who").textContent = "logado como " + me.user;
+    showApp();
+    await loadExperts();
+    await loadProfiles();
+    await loadJobs();
+    await loadStatus();
+    await loadOllamaModels();
+  } catch (err) { showLogin(); }
+}
+
+boot();
+setInterval(() => { if (!$("app-view").classList.contains("hidden")) loadJobs().catch(() => {}); }, 5000);
+setInterval(() => { if (!$("app-view").classList.contains("hidden")) loadStatus().catch(() => {}); }, 30000);
+</script>
+<footer style="padding:12px 20px;border-top:1px solid #22262f;text-align:center" class="muted">
+  brain-framework v__VERSION__ · dashboard v__VERSION__
+</footer>
+</body>
+</html>
