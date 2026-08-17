@@ -25,9 +25,8 @@ conhecimento do `brain-tool`.
 ~/.hermes/brain/
 ├── global/
 │   └── brain.db          # conhecimento compartilhado entre todos os experts
-├── experts/
-│   └── <nome>/
-│       └── brain.db      # conhecimento específico de um expert
+├── <nome>/
+│   └── brain.db          # conhecimento específico de um expert
 ├── admins.json           # lista de administradores
 └── backups/              # backups de `brain backup`
 ```
@@ -101,7 +100,7 @@ hermes plugins doctor . --ci   # validação local
 
 ```bash
 brain add profile <nome>       # hermes profile create + brain.db + alias no ~/.bashrc
-brain list profiles            # lista experts em experts/ com contagem de conhecimento
+brain list profiles            # lista experts (pastas na raiz do brain) com contagem
 brain remove profile <nome>    # remove brain.db + diretório + alias (confirma em TTY)
 brain remove profile <nome> --yes   # remove sem confirmação
 ```

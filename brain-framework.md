@@ -79,13 +79,12 @@ Ele tem:
 ~/.hermes/brain/
 ├── global/
 │   └── brain.db          # conhecimento compartilhado
-├── experts/
-│   ├── maria/
-│   │   └── brain.db      # conhecimento específico de Maria
-│   ├── jose/
-│   │   └── brain.db      # conhecimento específico de José
-│   └── <outro_expert>/
-│       └── brain.db
+├── maria/
+│   └── brain.db          # conhecimento específico de Maria
+├── jose/
+│   └── brain.db          # conhecimento específico de José
+├── <outro_expert>/
+│   └── brain.db
 └── ...
 
 ### 3.2 Schema do brain.db (simplificado)
@@ -457,11 +456,10 @@ O Brain Framework é um sistema de gestão de conhecimento para agentes de IA, c
 ~/.hermes/brain/
 ├── global/
 │   └── brain.db          # Conhecimento compartilhado
-├── experts/
-│   ├── maria/
-│   │   └── brain.db      # Conhecimento específico de Maria
-│   └── jose/
-│       └── brain.db      # Conhecimento específico de José
+├── maria/
+│   └── brain.db          # Conhecimento específico de Maria
+├── jose/
+│   └── brain.db          # Conhecimento específico de José
 └── admins.json           # Lista de administradores
 
 ### 2.2 Schema do brain.db (v1.0.0)
@@ -565,7 +563,7 @@ O que faz:
 ### 4.2 `list profiles` — Listar experts
 bash
 brain list profiles
-- Lista todos os diretórios em `experts/`
+- Lista todas as pastas de expert na raiz do brain (`~/.hermes/brain/`)
 - Mostra status (existe/não existe) e contagem de conhecimentos
 
 ### 4.3 `remove profile` — Remover expert
@@ -946,7 +944,7 @@ sudo brain backup
 - `brain_tool.py` — manipulação de brain.db, schema, comandos CRUD
 - `backup.sh` — backup/restore (pode ser adaptado para brain backup)
 - `schema_pack.yaml` — schema de taxonomia (pode ser usado como template)
-- Estrutura de diretórios (global, experts) — convenção, não obrigatoriedade
+- Estrutura de diretórios (global, perfis) — convenção, não obrigatoriedade
 - Comando `hermes profile create <name>` — cria profiles Hermes
 - Alias padrão do Hermes Agent para profiles (exemplo: `marketing`)
 

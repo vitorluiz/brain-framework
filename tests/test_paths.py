@@ -27,7 +27,7 @@ def test_get_brain_root_uses_runtime_environment_precedence(
     assert get_brain_root() == (home / ".hermes" / "brain").resolve()
 
 
-def test_get_brain_db_path_uses_experts_and_global_layout(
+def test_get_brain_db_path_uses_expert_and_global_layout(
     tmp_path: Path, monkeypatch,
 ):
     root = (tmp_path / "dynamic-root").resolve()
@@ -36,8 +36,8 @@ def test_get_brain_db_path_uses_experts_and_global_layout(
     expert_db = Path(core.get_brain_db_path(expert="alpha"))
     global_db = Path(core.get_brain_db_path(global_brain=True))
 
-    # spec §3.1 / requirements §2.1: experts/<name>/brain.db + global/brain.db
-    assert expert_db == root / "experts" / "alpha" / "brain.db"
+    # spec §3.1 / requirements §2.1: <name>/brain.db + global/brain.db
+    assert expert_db == root / "alpha" / "brain.db"
     assert global_db == root / "global" / "brain.db"
     assert expert_db.is_relative_to(root)
     assert global_db.is_relative_to(root)
@@ -46,7 +46,7 @@ def test_get_brain_db_path_uses_experts_and_global_layout(
 @pytest.mark.parametrize(
     "expert",
     ["", ".", "..", "../x", "a/b", r"a\b", "/tmp/x", "alpha beta", "-alpha",
-     "a" * 65, "global", "backups", "experts"],
+     "a" * 65, "global", "backups"],
 )
 def test_invalid_expert_identifiers_are_rejected_before_filesystem_access(
     expert: str, tmp_path: Path, monkeypatch,

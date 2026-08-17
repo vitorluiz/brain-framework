@@ -62,7 +62,7 @@ brain jobs  --expert maria
 ```
 ~/.hermes/brain/
 ├── global/brain.db
-├── experts/maria/brain.db
+├── maria/brain.db
 ├── admins.json
 └── backups/
 ```

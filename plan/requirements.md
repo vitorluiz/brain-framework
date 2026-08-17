@@ -26,11 +26,10 @@ O Brain Framework é um sistema de gestão de conhecimento para agentes de IA, c
 ~/.hermes/brain/
 ├── global/
 │   └── brain.db          # Conhecimento compartilhado
-├── experts/
-│   ├── maria/
-│   │   └── brain.db      # Conhecimento específico de Maria
-│   └── jose/
-│       └── brain.db      # Conhecimento específico de José
+├── maria/
+│   └── brain.db          # Conhecimento específico de Maria
+├── jose/
+│   └── brain.db          # Conhecimento específico de José
 └── admins.json           # Lista de administradores
 ```
 
@@ -193,7 +192,7 @@ O que faz:
 ```
 brain list profiles
 ```
-- Lista todos os diretórios em `experts/`
+- Lista todas as pastas de expert na raiz do brain (`~/.hermes/brain/`)
 - Mostra status (existe/não existe) e contagem de conhecimentos
 
 ### 4.3 `remove profile` — Remover expert

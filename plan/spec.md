@@ -76,13 +76,12 @@ Ele tem:
 ~/.hermes/brain/
 ├── global/
 │   └── brain.db          # conhecimento compartilhado
-├── experts/
-│   ├── maria/
-│   │   └── brain.db      # conhecimento específico de Maria
-│   ├── jose/
-│   │   └── brain.db      # conhecimento específico de José
-│   └── <outro_expert>/
-│       └── brain.db
+├── maria/
+│   └── brain.db          # conhecimento específico de Maria
+├── jose/
+│   └── brain.db          # conhecimento específico de José
+├── <outro_expert>/
+│   └── brain.db
 └── ...
 ```
 

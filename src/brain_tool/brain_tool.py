@@ -31,6 +31,7 @@ from .db import (
     get_db_connection,
     get_session,
     initialize_schema,
+    list_expert_names,
     validate_expert_identifier,
 )
 from .models import Job, KnowledgeStaging, Page

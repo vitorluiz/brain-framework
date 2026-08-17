@@ -11,6 +11,7 @@ from .brain_tool import (  # noqa: F401
     get_db_connection,
     get_session,
     initialize_schema,
+    list_expert_names,
     generate_canonical_hash,
     remember,
     recall,

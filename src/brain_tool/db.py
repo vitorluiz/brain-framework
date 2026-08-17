@@ -21,7 +21,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from .models import Base, SCHEMA_VERSION
 
 _EXPERT_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
-_RESERVED_SCOPES = {"global", "backups", "experts"}
+# Nomes que não podem ser usados como expert (são escopos/dir especiais da raiz).
+_RESERVED_SCOPES = {"global", "backups"}
 
 SQLITE_TIMEOUT_SECONDS = 5.0
 SQLITE_BUSY_TIMEOUT_MS = 5_000
@@ -91,10 +92,26 @@ def get_brain_db_path(expert=None, brain_path=None, global_brain=False) -> str:
     if global_brain:
         candidate = (root / "global" / "brain.db").resolve()
     else:
-        candidate = (root / "experts" / str(expert) / "brain.db").resolve()
+        candidate = (root / str(expert) / "brain.db").resolve()
     if not candidate.is_relative_to(root):
         raise ValueError("Brain database path escapes the configured root")
     return os.fspath(candidate)
+
+
+def list_expert_names() -> list[str]:
+    """Nomes dos experts — uma pasta por expert, direto na raiz do brain.
+
+    Espelha o layout `~/.hermes/profiles/<nome>/` do Hermes (sem o antigo
+    subdiretório `experts/`). Ignora escopos reservados (`global`, `backups`)
+    e dotfiles (`.uploads`, `.dashboard_*` etc.).
+    """
+    root = get_brain_root()
+    if not root.is_dir():
+        return []
+    return sorted(
+        d.name for d in root.iterdir()
+        if d.is_dir() and not d.name.startswith(".") and d.name not in _RESERVED_SCOPES
+    )
 
 
 def _shared_database_url() -> Optional[str]:
