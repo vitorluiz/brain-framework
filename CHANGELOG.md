@@ -35,6 +35,10 @@ e o versionamento segue [SemVer](https://semver.org/lang/pt-BR/).
   e `brain log`, migração genesis de dados legados.
 - **Checkpoints assinados — Fase 2**: `brain diff`, `brain approve` e
   `brain rollback` (não-destrutivo), com resolução de commit por prefixo único.
+- **Checkpoints assinados — Fase 3**: quarentena (`learn` propõe um commit
+  candidato sem publicar + `brain merge`), detecção heurística de conteúdo
+  suspeito (instruções/credenciais/PII) e extração isolada (subprocesso com
+  limites de CPU/memória/tempo) com pré-checks de tamanho e MIME.
 
 ### Alterado
 
@@ -66,6 +70,9 @@ e o versionamento segue [SemVer](https://semver.org/lang/pt-BR/).
 - Checkpoints assinados com **Ed25519** — chave privada/pública **fora do banco**
   (âncora de confiança); gerada automaticamente no primeiro uso em
   `$BRAIN_ROOT/.signing/` (override via `BRAIN_SIGNING_KEY`/`BRAIN_SIGNING_KEY_PUB`).
+- **Mitigação de prompt injection**: conteúdo importado nasce em quarentena
+  (não-publicado), com scan de instruções/credenciais/PII e extração de
+  PDF/DOCX/planilhas em subprocesso isolado (rlimits + timeout).
 
 ### Removido
 
