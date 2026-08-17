@@ -1,4 +1,4 @@
-__version__ = "1.2.0"
+__version__ = "1.0.0"
 __author__ = "Vitor Luiz <vitorluizmachado@gmail.com>"
 
 # Re-exporta a API pública para `from brain_tool import ...`.

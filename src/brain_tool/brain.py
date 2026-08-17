@@ -29,6 +29,11 @@ Uso:
   brain global learn --path ...- Aprende conhecimento global
   brain backup                 - Backup de todos os brains
   brain restore --from <ts>    - Restaura brains de um backup
+  brain verify                 - Verifica integridade dos checkpoints assinados
+  brain log --scope ...        - Histórico de commits de um scope
+  brain diff --scope ...       - Diferença de árvore entre commits
+  brain approve --scope ...    - Registra aprovação/rejeição de um commit
+  brain rollback --scope ...   - Move main para um commit anterior
   brain update                  - Atualiza framework
   brain sync all               - Sync de todos os brains
   brain admin list             - Lista administradores
@@ -49,7 +54,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 
 SCHEMA_VERSION = "1.0.0"
-__version__ = "1.2.0"
+__version__ = "1.0.0"
 
 # === Importação do brain_tool (CLI core de manipulação de conhecimento) ===
 from brain_tool import (
@@ -62,6 +67,7 @@ from brain_tool.auth import (
     admin_config_file, load_admins, save_admins, is_admin, is_group_member,
 )
 from brain_tool.db import dispose_engine_for_path
+from brain_tool.checkpoints import verify_scope, history, diff, approve, rollback
 
 # === (fallback sqlite3 legado descontinuado — brain_tool sempre importável) ===
 if False:
@@ -1109,6 +1115,142 @@ def cmd_restore(args) -> int:
     return 0 if results else 1
 
 
+def _open_scope_session(scope: str):
+    """Abre uma Session para um scope (`global` ou `expert/<nome>`)."""
+    if scope == "global":
+        bp = get_brain_db_path(global_brain=True)
+    elif scope.startswith("expert/"):
+        bp = get_brain_db_path(expert=scope[len("expert/"):])
+    else:
+        raise ValueError(f"scope invalido: {scope} (use 'global' ou 'expert/<nome>')")
+    if not os.path.exists(bp):
+        return None
+    return get_db_connection(bp)
+
+
+def cmd_verify(args) -> int:
+    """Verifica integridade dos checkpoints assinados (cadeia + assinaturas)."""
+    if getattr(args, "scope", None):
+        scopes = [args.scope]
+    else:
+        scopes = ["global"] + [f"expert/{n}" for n in get_expert_names()]
+
+    print("\n=== Brain: Verify (checkpoints assinados) ===")
+    all_ok = True
+    for scope in scopes:
+        conn = _open_scope_session(scope)
+        if conn is None:
+            print(f"  [skip] {scope}: sem brain.db")
+            continue
+        try:
+            result = verify_scope(conn, scope)
+        finally:
+            conn.close()
+        if result.get("ok"):
+            print(f"  [OK] {scope} — {result['commits']} commits")
+        else:
+            all_ok = False
+            print(f"  [FALHOU] {scope} — {result['commits']} commits")
+        for issue in result.get("issues", []):
+            print(f"      ! {issue}")
+        if "note" in result:
+            print(f"      ({result['note']})")
+    print(f"\n= Verify concluido: {'OK' if all_ok else 'FALHAS ENCONTRADAS'}")
+    return 0 if all_ok else 1
+
+
+def cmd_log(args) -> int:
+    """Histórico de commits de um scope (mais novo primeiro)."""
+    scope = args.scope
+    conn = _open_scope_session(scope)
+    if conn is None:
+        print(f"Scope {scope} sem brain.db.", file=sys.stderr)
+        return 1
+    try:
+        entries = history(conn, scope)
+    finally:
+        conn.close()
+
+    print(f"\n=== Histórico de commits — {scope} ===")
+    if not entries:
+        print("  (nenhum commit)")
+        return 0
+    for e in entries:
+        title = e["message"] or e["policy"]
+        print(f"  {e['created_at']}  {e['id']}  {e['author']}  {title}")
+    return 0
+
+
+def cmd_diff(args) -> int:
+    """Diferença de árvore entre commits de um scope."""
+    scope = args.scope
+    conn = _open_scope_session(scope)
+    if conn is None:
+        print(f"Scope {scope} sem brain.db.", file=sys.stderr)
+        return 1
+    try:
+        changes = diff(conn, scope,
+                       from_commit=getattr(args, "from_commit", None),
+                       to_commit=getattr(args, "to_commit", None))
+    finally:
+        conn.close()
+
+    print(f"\n=== Diff — {scope} ===")
+    if not changes:
+        print("  (sem diferenças)")
+        return 0
+    for ch in changes:
+        titulo = ch.get("titulo") or "(sem título)"
+        print(f"  {ch['op']:<6} {ch['object_hash'][:12]}  {ch.get('tipo', '')}  {titulo}")
+    return 0
+
+
+def cmd_approve(args) -> int:
+    """Registra aprovação/rejeição de um commit (governança)."""
+    scope = args.scope
+    conn = _open_scope_session(scope)
+    if conn is None:
+        print(f"Scope {scope} sem brain.db.", file=sys.stderr)
+        return 1
+    decision = "reject" if getattr(args, "reject", False) else "approve"
+    try:
+        aid = approve(conn, scope, args.candidate, "cli:local",
+                      policy=getattr(args, "policy", "manual"),
+                      decision=decision,
+                      justification=getattr(args, "note", None))
+    finally:
+        conn.close()
+    print(f"\n= {decision} registrada (id={aid}) — {args.candidate[:12]}")
+    return 0
+
+
+def cmd_rollback(args) -> int:
+    """Move a ref main para um commit anterior (não destrutivo)."""
+    scope = args.scope
+    conn = _open_scope_session(scope)
+    if conn is None:
+        print(f"Scope {scope} sem brain.db.", file=sys.stderr)
+        return 1
+    if not getattr(args, "yes", False):
+        try:
+            resp = input(f"\nMover main de {scope} para {args.to[:12]}? [s/N] ")
+        except EOFError:
+            resp = "n"
+        if resp.strip().lower() not in ("s", "sim", "y", "yes"):
+            print("Rollback cancelado.")
+            conn.close()
+            return 1
+    try:
+        result = rollback(conn, scope, args.to, "cli:local")
+    finally:
+        conn.close()
+    if not result.get("ok"):
+        print(f"Erro: {result.get('error')}", file=sys.stderr)
+        return 1
+    print(f"\n= Rollback concluido — {scope} -> {result['to'][:12]} ({result['pages']} páginas)")
+    return 0
+
+
 def cmd_update(args) -> int:
     """Atualiza o Brain Framework via git pull."""
     print(f"\n=== Brain: Atualizando framework ===")
@@ -1508,6 +1650,11 @@ Comandos de Gestão:
   global learn         - Aprende conhecimento para o brain global
   backup               - Backup de todos os brains (global + experts)
   restore --from TS    - Restaura brains de um backup (--list lista backups)
+  verify [--scope S]   - Verifica integridade dos checkpoints assinados
+  log --scope S        - Histórico de commits (global ou expert/<nome>)
+  diff --scope S       - Diferença de árvore entre commits (add/remove/change)
+  approve --scope S    - Registra aprovação/rejeição de um commit
+  rollback --scope S   - Move main para commit anterior (não destrutivo)
   update               - Atualiza o framework via git pull origin main
   sync all             - Faz sync de todos os brains
   admin list           - Lista administradores configurados
@@ -1582,6 +1729,34 @@ Para conhecer mais:
     p_restore.add_argument('--list', action='store_true', dest='list_backups',
                            help='Lista os backups disponiveis e sai')
     p_restore.set_defaults(func=lambda args: cmd_restore(args))
+
+    p_verify = sp.add_parser('verify', help='Verifica integridade dos checkpoints assinados')
+    p_verify.add_argument('--scope', help='Scope a verificar (global ou expert/<nome>); default: todos')
+    p_verify.set_defaults(func=lambda args: cmd_verify(args))
+
+    p_log = sp.add_parser('log', help='Histórico de commits de um scope')
+    p_log.add_argument('--scope', required=True, help='Scope (global ou expert/<nome>)')
+    p_log.set_defaults(func=lambda args: cmd_log(args))
+
+    p_diff = sp.add_parser('diff', help='Diferença de árvore entre commits de um scope')
+    p_diff.add_argument('--scope', required=True, help='Scope (global ou expert/<nome>)')
+    p_diff.add_argument('--from', dest='from_commit', help='Commit de origem (default: parent do main)')
+    p_diff.add_argument('--to', dest='to_commit', help='Commit de destino (default: main)')
+    p_diff.set_defaults(func=lambda args: cmd_diff(args))
+
+    p_approve = sp.add_parser('approve', help='Registra aprovação/rejeição de um commit')
+    p_approve.add_argument('--scope', required=True, help='Scope (global ou expert/<nome>)')
+    p_approve.add_argument('--candidate', required=True, help='Commit a aprovar/rejeitar')
+    p_approve.add_argument('--policy', default='manual', help='Política aplicada (default: manual)')
+    p_approve.add_argument('--note', help='Justificativa')
+    p_approve.add_argument('--reject', action='store_true', help='Registra rejeição em vez de aprovação')
+    p_approve.set_defaults(func=lambda args: cmd_approve(args))
+
+    p_rollback = sp.add_parser('rollback', help='Move a ref main para um commit anterior (não destrutivo)')
+    p_rollback.add_argument('--scope', required=True, help='Scope (global ou expert/<nome>)')
+    p_rollback.add_argument('--to', required=True, help='Commit de destino')
+    p_rollback.add_argument('--yes', action='store_true', help='Sem confirmação')
+    p_rollback.set_defaults(func=lambda args: cmd_rollback(args))
 
     p_update = sp.add_parser('update', help='Atualiza o framework')
     p_update.set_defaults(func=lambda args: cmd_update(args))

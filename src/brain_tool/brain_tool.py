@@ -35,8 +35,9 @@ from .db import (
 from .models import Job, KnowledgeStaging, Page
 
 from .auth import require_admin
+from . import checkpoints
 
-__version__ = "1.2.0"
+__version__ = "1.0.0"
 
 
 def generate_canonical_hash(content: str) -> str:
@@ -75,14 +76,23 @@ def remember(conn, expert, tipo, titulo=None, corpo="", hash_canonical=None, dry
         }
     if not hash_canonical:
         hash_canonical = generate_canonical_hash(corpo)
+    checkpoints.ensure_genesis(conn, expert)
     page = Page(expert=expert, tipo=tipo, titulo=titulo, corpo=corpo,
                 hash_canonical=hash_canonical)
     conn.add(page)
+    conn.flush()
+    commit_id = checkpoints.create_commit(
+        conn, checkpoints.scope_for(expert),
+        [{"op": "add", "object_hash": hash_canonical, "content": corpo,
+          "tipo": tipo, "titulo": titulo}],
+        author=actor or "cli:local",
+    )
     conn.commit()
     return {
         "action": "remember",
         "id": page.id, "expert": expert, "tipo": tipo, "titulo": titulo,
         "hash": hash_canonical, "created_at": _iso(page.created_at),
+        "commit": commit_id,
     }
 
 
@@ -106,7 +116,15 @@ def forget(conn, expert, page_id, dry_run=False, actor=None):
         return {"action": "forget (dry-run)", "would_delete": False,
                 "reason": "pagina nao encontrada"}
     if page and page.expert == expert:
+        checkpoints.ensure_genesis(conn, expert)
+        obj_hash = page.hash_canonical or generate_canonical_hash(page.corpo)
         conn.delete(page)
+        checkpoints.create_commit(
+            conn, checkpoints.scope_for(expert),
+            [{"op": "remove", "object_hash": obj_hash,
+              "tipo": page.tipo, "titulo": page.titulo}],
+            author=actor or "cli:local",
+        )
         conn.commit()
         return {"action": "forget", "id": page_id, "deleted": True}
     return {"action": "forget", "deleted": False, "reason": "pagina nao encontrada"}
@@ -498,6 +516,8 @@ def learn(conn, expert, file_path, sync_immediately=False, dry_run=False, actor=
 
 def sync(conn, expert, staging_id=None, actor=None):
     require_admin(actor)
+    author = actor or "cli:local"
+    scope = checkpoints.scope_for(expert)
     if staging_id:
         s = conn.get(KnowledgeStaging, staging_id)
         if not s or s.expert != expert:
@@ -512,10 +532,18 @@ def sync(conn, expert, staging_id=None, actor=None):
             conn.commit()
             return {"action": "sync", "staging_id": staging_id, "status": "skipped",
                     "reason": "hash ja existe", "hash": s.hash_canonical}
+        checkpoints.ensure_genesis(conn, expert)
         page = Page(expert=expert, tipo="auto_learned",
                     titulo=f"Arquivo aprendido (staging #{staging_id})",
                     corpo=s.chunk_data, hash_canonical=s.hash_canonical)
         conn.add(page)
+        conn.flush()
+        checkpoints.create_commit(
+            conn, scope,
+            [{"op": "add", "object_hash": s.hash_canonical, "content": s.chunk_data,
+              "tipo": "auto_learned", "titulo": page.titulo}],
+            author=author,
+        )
         conn.delete(s)
         conn.commit()
         return {"action": "sync", "staging_id": staging_id, "page_id": page.id,
@@ -529,8 +557,10 @@ def sync(conn, expert, staging_id=None, actor=None):
         return {"action": "sync", "expert": expert,
                 "status": "nothing_to_sync", "pending_count": 0}
 
+    checkpoints.ensure_genesis(conn, expert)
     synced = 0
     skipped = 0
+    changes = []
     for e in pending:
         existing = conn.scalars(
             select(Page).where(Page.hash_canonical == e.hash_canonical,
@@ -542,7 +572,12 @@ def sync(conn, expert, staging_id=None, actor=None):
         conn.add(Page(expert=expert, tipo="auto_learned",
                       titulo=f"Arquivo aprendido (staging #{e.id})",
                       corpo=e.chunk_data, hash_canonical=e.hash_canonical))
+        changes.append({"op": "add", "object_hash": e.hash_canonical,
+                        "content": e.chunk_data, "tipo": "auto_learned",
+                        "titulo": f"Arquivo aprendido (staging #{e.id})"})
         synced += 1
+    if changes:
+        checkpoints.create_commit(conn, scope, changes, author=author)
     for e in pending:
         conn.delete(e)
     conn.commit()
@@ -588,6 +623,20 @@ def check(conn, expert):
             ).scalar() or 0
         except Exception:
             result["counts"][t] = 0
+
+    # Ponte (decisão §13.5): detecta páginas legadas cujo conteúdo foi adulterado.
+    tampered = []
+    for p in conn.scalars(select(Page).where(Page.expert == expert)).all():
+        if p.hash_canonical and p.hash_canonical != generate_canonical_hash(p.corpo):
+            tampered.append(p.id)
+    if tampered:
+        if result["integrity"] == "ok":
+            result["integrity"] = "tampered"
+        result["issues"].append({
+            "type": "hash_mismatch",
+            "page_ids": tampered,
+            "detail": "hash_canonical não confere com o conteúdo",
+        })
     return result
 
 
