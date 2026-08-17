@@ -78,3 +78,72 @@ def test_learn_with_authorized_admin_succeeds(tmp_path, monkeypatch):
     recall = json.loads(handler({"action": "recall", "expert": "maria", "search": "mensageria"}))
     assert recall["ok"] is True
     assert recall["count"] == 1
+
+
+# --- governança exposta no plugin (Fase 4) -----------------------------------
+
+def test_governance_readonly_actions_no_admin(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRAIN_ROOT", str(tmp_path / "brain"))
+    handler = _registered_handler()
+    for action in ("verify", "log", "diff"):
+        out = json.loads(handler({"action": action, "expert": "maria"}))
+        # não pode ser "forbidden" (são só leitura)
+        assert out.get("error", {}).get("code") != "forbidden", (action, out)
+
+
+def test_governance_mutating_actions_require_admin(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRAIN_ROOT", str(tmp_path / "brain"))
+    handler = _registered_handler()
+    cases = [
+        {"action": "approve", "candidate": "abc"},
+        {"action": "merge", "candidate": "abc"},
+        {"action": "rollback", "to": "abc"},
+        {"action": "promote", "from_scope": "expert/maria", "to_scope": "global"},
+    ]
+    for args in cases:
+        out = json.loads(handler(args))
+        assert out["ok"] is False, args
+        assert out["error"]["code"] == "forbidden", args
+
+
+def test_governance_flow_learn_verify_log_merge_via_plugin(tmp_path, monkeypatch):
+    root = tmp_path / "brain"
+    monkeypatch.setenv("BRAIN_ROOT", str(root))
+    _write_admins(tmp_path, ["wa:admin"])
+
+    src = tmp_path / "doc.txt"
+    src.write_text("conteudo governado via plugin")
+
+    handler = _registered_handler()
+    admin = "wa:admin"
+
+    # learn sem sync → quarentena (candidato proposto)
+    learn = json.loads(handler({
+        "action": "learn", "expert": "maria", "path": str(src),
+        "sync": False, "admin_id": admin,
+    }))
+    assert learn["ok"] is True
+    assert learn["status"] == "proposed"
+    job_id = learn["job_id"]
+
+    # verify / log / diff (somente leitura)
+    verify = json.loads(handler({"action": "verify", "expert": "maria"}))
+    assert verify["ok"] is True
+    diff = json.loads(handler({"action": "diff", "expert": "maria"}))
+    assert diff["ok"] is True
+    # main ainda vazia (quarentena) — log sem commits na main
+    log = json.loads(handler({"action": "log", "expert": "maria"}))
+    assert log["ok"] is True and log["count"] == 0
+
+    # merge (publica) — admin_id obrigatório
+    merge = json.loads(handler({
+        "action": "merge", "expert": "maria", "candidate": job_id, "admin_id": admin,
+    }))
+    assert merge["ok"] is True, merge
+
+    # agora main tem histórico
+    log = json.loads(handler({"action": "log", "expert": "maria"}))
+    assert log["ok"] is True and log["count"] >= 1
+
+    recall = json.loads(handler({"action": "recall", "expert": "maria"}))
+    assert recall["count"] == 1

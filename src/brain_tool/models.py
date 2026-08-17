@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 SCHEMA_VERSION = "1.0.0"
@@ -45,11 +45,18 @@ class Page(Base):
 
 class KnowledgeStaging(Base):
     __tablename__ = "knowledge_staging"
+    __table_args__ = (
+        UniqueConstraint(
+            "expert", "hash_canonical", "pipeline_version",
+            name="uq_knowledge_staging_expert_hash_pipeline",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     expert: Mapped[str] = mapped_column(String, nullable=False, index=True)
     chunk_data: Mapped[str] = mapped_column(Text, nullable=False)
     hash_canonical: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    pipeline_version: Mapped[str] = mapped_column(String, nullable=False, default="1")
     status: Mapped[str] = mapped_column(String, default="pending")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.utcnow())
     processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

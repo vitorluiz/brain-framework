@@ -111,8 +111,10 @@ def test_propose_learn_candidate_quarantines(tmp_path: Path, monkeypatch):
         src.write_text("quarentena via worker")
 
         result = core._propose_learn_candidate(conn, "maria", str(src), "job-x")
+        result2 = core._propose_learn_candidate(conn, "maria", str(src), "job-y")
 
         assert result["status"] == "proposed"
+        assert result2["skipped_existing"] >= 1  # índice único de staging ativo
         assert core.count_pages(conn, "maria") == 0  # não publicou
         cand = checkpoints.get_candidate_commit(conn, "expert/maria", "job-x")
         assert cand is not None

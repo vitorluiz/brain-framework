@@ -41,6 +41,7 @@ _MIGRATION_COLUMNS = {
     "knowledge_staging": [
         ("expert", "TEXT NOT NULL DEFAULT 'unknown'"),
         ("hash_canonical", "TEXT"),
+        ("pipeline_version", "TEXT NOT NULL DEFAULT '1'"),
         ("status", "TEXT DEFAULT 'pending'"),
         ("chunk_data", "TEXT NOT NULL DEFAULT ''"),
         ("created_at", "TIMESTAMP"),
@@ -248,6 +249,7 @@ def initialize_schema(engine: Engine) -> None:
         return
     Base.metadata.create_all(engine)
     _apply_column_migrations(engine)
+    _ensure_staging_unique_index(engine)
     with engine.begin() as conn:
         row = conn.execute(
             text("SELECT version FROM schema_version ORDER BY applied_at DESC LIMIT 1")
@@ -275,6 +277,32 @@ def _apply_column_migrations(engine: Engine) -> None:
             for name, ddl in columns:
                 if name not in existing:
                     conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+
+
+def _ensure_staging_unique_index(engine: Engine) -> None:
+    """Hardening Celery/Redis: impede duplicação de staging por retry.
+
+    Garante o índice único `(expert, hash_canonical, pipeline_version)`.
+    Em bases legadas, remove duplicatas antigas (mantém o menor id) antes de
+    criar o índice para evitar falha em ambientes com dados já repetidos.
+    """
+    with engine.begin() as conn:
+        conn.execute(text(
+            """
+            DELETE FROM knowledge_staging
+            WHERE id NOT IN (
+                SELECT MIN(id)
+                FROM knowledge_staging
+                GROUP BY expert, hash_canonical, COALESCE(pipeline_version, '1')
+            )
+            """
+        ))
+        conn.execute(text(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_knowledge_staging_expert_hash_pipeline
+            ON knowledge_staging (expert, hash_canonical, pipeline_version)
+            """
+        ))
 
 
 def get_session_from_url(database_url: str) -> Session:
