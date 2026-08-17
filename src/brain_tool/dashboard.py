@@ -39,7 +39,7 @@ from urllib.parse import urlparse
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from .brain_tool import check, count_pages, learn, list_jobs, register_upload_asset
+from .brain_tool import check, count_pages, learn, list_jobs, register_upload_asset, __version__
 from .db import get_brain_root, get_session, list_expert_names, validate_expert_identifier
 from .brain import (
     resolve_hermes_profile_dir,
@@ -437,7 +437,8 @@ def create_app(secret: Optional[str] = None, token: Optional[str] = None) -> Fas
                                 max_age=_SESSION_TTL)
                 return resp
             return RedirectResponse("/", status_code=302)
-        return HTMLResponse(_INDEX_HTML)
+        # render index with build version in footer
+        return HTMLResponse(_INDEX_HTML.format(version=__version__))
 
     @app.post("/login")
     async def login(
@@ -1224,6 +1225,9 @@ boot();
 setInterval(() => { if (!$("app-view").classList.contains("hidden")) loadJobs().catch(() => {}); }, 5000);
 setInterval(() => { if (!$("app-view").classList.contains("hidden")) loadStatus().catch(() => {}); }, 30000);
 </script>
+<footer style="padding:12px 20px;border-top:1px solid #22262f;text-align:center" class="muted">
+  brain-framework {version}
+</footer>
 </body>
 </html>
 """
