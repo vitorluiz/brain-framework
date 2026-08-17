@@ -1,0 +1,7 @@
+name: brain-framework
+version: 1.0.0
+description: "Brain Framework — base de conhecimento (brain.db) para experts do Hermes. Tool nativa `brain` com absorção de conhecimento admin-only (spec §5)."
+author: Vitor Luiz <vitorluizmachado@gmail.com>
+kind: backend
+provides_tools:
+  - brain

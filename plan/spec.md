@@ -13,7 +13,7 @@
 
 O **Brain Framework** é um sistema para gerenciar bases de conhecimento
 (SQLite brain.db) para agentes de IA (experts), com um brain global
-compartilhado entre todos os agents, e um gestor chamado **Celebro**.
+compartilhado entre todos os agents, e um gestor chamado **Brain**.
 
 É agnóstico a qualquer sistema específico — pode ser usado por qualquer
 usuário que queira dar conhecimento aos seus agents de IA e ter esses agents
@@ -23,9 +23,9 @@ consultarem esse conhecimento durante conversas.
 
 ## 2. Componentes Principais
 
-### 2.1 Celebro
+### 2.1 Brain
 
-Celebro é o perfil mestre nativo do framework — o gestor do sistema.
+Brain é o perfil mestre nativo do framework — o gestor do sistema.
 Ele não é um agente de IA comum; é o gestor que cria, configura, e gerencia
 os outros profiles/agents.
 
@@ -76,13 +76,12 @@ Ele tem:
 ~/.hermes/brain/
 ├── global/
 │   └── brain.db          # conhecimento compartilhado
-├── experts/
-│   ├── maria/
-│   │   └── brain.db      # conhecimento específico de Maria
-│   ├── jose/
-│   │   └── brain.db      # conhecimento específico de José
-│   └── <outro_expert>/
-│       └── brain.db
+├── maria/
+│   └── brain.db          # conhecimento específico de Maria
+├── jose/
+│   └── brain.db          # conhecimento específico de José
+├── <outro_expert>/
+│   └── brain.db
 └── ...
 ```
 
@@ -193,7 +192,7 @@ $ maria --learn sync   # sync explícito (sem reprocessar)
 
 # Global:
 $ jose --global-learn "texto" --sync
-$ celebro global --learn /caminho/ --sync
+$ brain global --learn /caminho/ --sync
 
 # WhatsApp admin:
 /admin learn maria /caminho/ --sync
@@ -203,7 +202,7 @@ $ celebro global --learn /caminho/ --sync
 ### 4.5 Monitoramento de Jobs
 
 - Status de jobs em andamento é visualizável:
-  - CLI: `maria --jobs` ou `celebro jobs` (lista jobs em andamento/completados)
+  - CLI: `maria --jobs` ou `brain jobs` (lista jobs em andamento/completados)
   - Dashboard: painel de jobs com status, progresso, hash, tempo
   - WhatsApp admin: `/admin jobs` (lista resumida)
 
@@ -256,7 +255,7 @@ Todos os comandos de knowledge absorption são admin-only, independente do canal
 $ maria --learn /caminho/dos/arquivos
 $ maria --learn sync
 $ jose --global-learn "texto"
-$ celebro global --learn /caminho/dos/arquivos/gerais/
+$ brain global --learn /caminho/dos/arquivos/gerais/
 ```
 
 - CLI não precisa de verificação de admin porque o acesso ao servidor já é
@@ -311,13 +310,13 @@ $ maria --learn sync
 $ jose --learn <caminho> [--sync]
 
 # Global knowledge:
-$ celebro global --learn <caminho> [--sync]
+$ brain global --learn <caminho> [--sync]
 $ jose --global-learn "texto" [--sync]
-$ celebro global --learn "texto" [--sync]
+$ brain global --learn "texto" [--sync]
 
 # Job management:
 $ maria --jobs
-$ celebro jobs
+$ brain jobs
 
 # Admin configuration (WhatsApp):
 $ maria --configure-admins add <numero>
@@ -370,7 +369,7 @@ It must never be available to untrusted parties.
 
 ```
 # Admin cria Maria:
-$ celebro add profile Maria
+$ brain add profile Maria
 → hermes profile create Maria
 → brain_tool.py init --name maria
 → alias maria="..." no .bashrc
@@ -391,7 +390,7 @@ Maria: consulta seu brain.db → responde com info de produto
 
 ```
 # Admin cria José:
-$ celebro add profile Jose
+$ brain add profile Jose
 → hermes profile create Jose
 → brain_tool.py init --name jose
 → alias jose="..." no .bashrc
@@ -400,7 +399,7 @@ $ celebro add profile Jose
 $ jose --learn /caminho/dos/arquivos/rh/ --sync
 
 # Admin popula conhecimento global:
-$ celebro global --learn /caminho/dos/arquivos/gerais/ --sync
+$ brain global --learn /caminho/dos/arquivos/gerais/ --sync
 
 # José acessa sistema de ponto (MCP/API):
 $ jose --configure-system access-point-system --mcp-endpoint ... --credentials ...
@@ -422,7 +421,7 @@ $ jose --global-learn "Horário de funcionamento: 7h-17h" --sync
 $ jose --global-learn "Horário de funcionamento: 7h-17h (alterado em 2026-08-14)" --sync
 
 # Opção 2 — Via usuário diretamente:
-$ celebro global --learn "Horário de funcionamento: 7h-17h (alterado em 2026-08-14)" --sync
+$ brain global --learn "Horário de funcionamento: 7h-17h (alterado em 2026-08-14)" --sync
 
 # Depois da mudança:
 # - Maria consulta global brain e vê novo horário
@@ -434,7 +433,7 @@ $ celebro global --learn "Horário de funcionamento: 7h-17h (alterado em 2026-08
 
 ## 9. Critérios de Aceitação (v1)
 
-- [ ] Celebro pode criar novo profile (alias + brain.db vazio)
+- [ ] Brain pode criar novo profile (alias + brain.db vazio)
 - [ ] CLI --learn popula brain.db de um expert
 - [ ] CLI --learn sync atualiza tabela principal
 - [ ] CLI --global-learn popula brain global

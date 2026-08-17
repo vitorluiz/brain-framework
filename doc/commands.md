@@ -1,247 +1,269 @@
 # Comandos — Referência de Uso
 
-> Esta é a referência de todos os comandos do Brain Framework.
-> Para entender o conceito, leia [Visão geral](./README.md).
+> Referência dos comandos do Brain Framework.
+> Para entender o conceito, leia o [README](./README.md).
 
 ---
 
-## brain_tool CLI
+## Executáveis
 
-O `brain_tool` é a CLI principal para manipular brain.db.
+Após `pip install .`, dois comandos ficam disponíveis (apontando para o mesmo CLI):
 
-```bash
-# Especificar qual brain usar
-python3 -m brain_tool --brain /caminho/para/brain/ <command> [options]
-python3 -m brain_tool --global <command> [options]
-
-# Sem especificar: usa BRAIN_PROFILE ou experts/jimmy/
-python3 -m brain_tool <command> [options]
-```
-
-### Comandos de CRUD
-
-#### `remember`
-
-Salva um registro (tipo, título, corpo).
-
-```bash
-python3 -m brain_tool --brain /caminho/para/brain/ remember \
-  --tipo concepts \
-  --titulo "Meu conceito" \
-  --corpo "Descrição do meu conceito"
-```
-
-#### `entity`
-
-Salva uma entidade nomeada.
-
-```bash
-python3 -m brain_tool --brain /caminho/para/brain/ entity \
-  --nome "João" \
-  --descricao "Responsável pelo sistema"
-```
-
-#### `recall`
-
-Recupera registros ativos por tipo/termo.
-
-```bash
-# Listar todos os conceitos
-python3 -m brain_tool --brain /caminho/para/brain/ recall --tipo concepts
-
-# Buscar por termo
-python3 -m brain_tool --brain /caminho/para/brain/ recall --tipo concepts --termo "conceito"
-```
-
-#### `synthesize`
-
-Consolida páginas de uma entidade em uma síntese.
-
-```bash
-python3 -m brain_tool --brain /caminho/para/brain/ synthesize --entity "João"
-```
-
-#### `forget`
-
-Arquiva uma página (soft delete). Use `--dry-run` para pré-ver.
-
-```bash
-# Arquivar sem dor
-python3 -m brain_tool --brain /caminho/para/brain/ forget --id 5 --dry-run
-
-# Arquivar de verdade
-python3 -m brain_tool --brain /caminho/para/brain/ forget --id 5
-```
-
-#### `consolidate`
-
-Deduplica (Jaccard) + tiering. Use `--dry-run` para pré-ver.
-
-```bash
-# Ver o que seria deduplicado
-python3 -m brain_tool --brain /caminho/para/brain/ consolidate --dry-run
-
-# Deduplicar de verdade
-python3 -m brain_tool --brain /caminho/para/brain/ consolidate
-```
-
-### Comandos de Classificação
-
-#### `taxonomist`
-
-Sugere tipo para conteúdo via schema + LLM.
-
-```bash
-python3 -m brain_tool --brain /caminho/para/brain/ taxonomist --conteudo "Texto para classificar"
-```
-
-#### `capture`
-
-Entrada única com hash dedup (idempotente).
-
-```bash
-python3 -m brain_tool --brain /caminho/para/brain/ capture --conteudo "Texto para capturar"
-```
-
-### Comandos de Aprendizado
-
-#### `learn`
-
-Aprende com jsonl de mensagens (extrai fatos com LLM).
-
-```bash
-python3 -m brain_tool --brain /caminho/para/brain/ learn --arquivo /caminho/para/mensagens.jsonl
-```
-
-### Comandos de Diagnóstico
-
-#### `check`
-
-Verifica integridade (PRAGMA + schema_version).
-
-```bash
-# Verificar um brain
-python3 -m brain_tool --brain /caminho/para/brain/ check
-
-# Verificar o brain global
-python3 -m brain_tool --global check
-```
-
-#### `init`
-
-Inicializa um novo brain.
-
-```bash
-# Inicializar um brain para um scope
-python3 -m brain_tool init --scope meu-sistema --brain-dir /caminho/para/brain/
-```
-
-#### `migrate`
-
-Aplica migrações pendentes do schema_version.
-
-```bash
-# Verificar se há migrações pendentes
-python3 -m brain_tool --brain /caminho/para/brain/ check
-
-# Aplicar migrações
-python3 -m brain_tool --brain /caminho/para/brain/ migrate
-```
-
----
-
-## Celebro CLI
-
-O `celebro` é o perfil mestre nativo do framework.
-
-```bash
-# Verificar a versão
-sudo celebro --version
-
-# Atualizar o framework
-sudo celebro update
-
-# Adicionar um profile
-sudo celebro add profile nome-do-profile
-
-# Sincronizar brains
-sudo celebro sync
-
-# Backup de todos os brains
-sudo celebro backup
-```
-
-### `sudo celebro update`
-
-Atualiza o framework para a versão mais recente.
-
-```bash
-sudo celebro update
-```
-
-O que faz:
-1. Verifica a versão atual (`celebro version`)
-2. Conecta ao repo (GitHub ou onde estiver hospedado)
-3. Pega a versão mais recente
-4. Substitui os arquivos locais
-5. Reporta o que mudou
-
-### `sudo celebro add profile`
-
-Adiciona um novo profile ao sistema.
-
-```bash
-sudo celebro add profile nome-do-profile
-```
-
-O que faz:
-1. Pergunta ao usuário: qual provider usar? (Nous, Ollama, etc.)
-2. Pergunta: qual LLM/default usar? (free LLMs por padrão)
-3. Cria ~/.brain/profiles/nome-do-profile/
-4. Cria brain.db com schema
-5. Cria schema_pack.yaml
-6. Configura o profile para usar o provider escolhido
-7. Reporta o que foi criado
-
-### `sudo celebro sync`
-
-Sincroniza brains entre profiles.
-
-```bash
-sudo celebro sync
-```
-
-O que faz:
-1. Para cada profile, lista o conhecimento relevante
-2. Pergunta ao usuário: o que sincronizar? (global, specific, tudo)
-3. Executa a sincronização via brain_tool
-4. Reporta o que foi sincronizado
-
-### `sudo celebro backup`
-
-Backup de todos os brains.
-
-```bash
-sudo celebro backup
-```
-
-O que faz:
-1. Backup do brain global
-2. Backup de cada profile
-3. Guarda em ~/.brain/backups/
-4. Rotação: mantém últimos N backups
-5. Reporta o que foi backupado
-
----
-
-## Diferença entre brain_tool e Celebro
-
-| | brain_tool | Celebro |
+| Comando | O que é | Entry point |
 |---|---|---|
-| **O que é** | CLI para manipular brain.db | Perfil mestre nativo do framework |
-| **Para quem** | Qualquer um que queira usar um brain.db | Usuários do sistema |
-| **O que faz** | CRUD de conhecimento, schema, etc. | Gerencia instalação, profiles, sync, backup |
-| **Como usar** | `python3 -m brain_tool <command>` | `sudo celebro <command>` |
-| **Universal?** | Sim — agnóstico a qualquer sistema | Sim — não assume nada sobre o sistema |
+| `brain` | Gestor nativo do framework (profiles, global, backup, admin) + conhecimento | `brain_tool.brain:main` |
+| `brain-tool` | alias do `brain` (mantido por compatibilidade) | `brain_tool.brain:main` |
 
-Celebro usa brain_tool nos bastidores — não reimplementa a manipulação de brain.db.
+Ambos aceitam `--version` e `--help`. O `brain_tool.py` é hoje apenas a camada
+de domínio (sem CLI próprio) — todo CLI vive em `brain.py`.
+
+---
+
+## Estrutura de diretórios (spec §3.1 / requirements §2.1)
+
+```
+~/.hermes/brain/
+├── global/
+│   └── brain.db          # conhecimento compartilhado entre todos os experts
+├── <nome>/
+│   └── brain.db          # conhecimento específico de um expert
+├── admins.json           # lista de administradores
+└── backups/              # backups de `brain backup`
+```
+
+A raiz é configurável via `BRAIN_ROOT` (default `~/.hermes/brain`).
+
+---
+
+## Backends de storage (SQLAlchemy)
+
+| Modo | Config | Uso |
+|---|---|---|
+| SQLite local (default) | `BRAIN_ROOT` (default `~/.hermes/brain`) | 1 pessoa / 1 expert — um `brain.db` por expert/global |
+| PostgreSQL (escala) | `DATABASE_URL` (ou `BRAIN_DATABASE_URL`) | organização — todos os experts dividem 1 banco, filtrados pela coluna `expert` |
+
+Exemplo PostgreSQL:
+
+```bash
+export DATABASE_URL="postgresql+psycopg://brain:brain@localhost:5432/brain"
+pip install -e ".[postgres]"   # driver psycopg
+```
+
+Com `DATABASE_URL` definido, `--brain-path`/`--expert` só filtram a coluna `expert`.
+
+---
+
+## Processamento assíncrono (Celery + Redis)
+
+O `learn` enfileira a ingestão num worker Celery quando o broker está
+configurado; sem broker, roda em modo síncrono (fallback — spec §4.6).
+
+```bash
+export REDIS_URL="redis://localhost:6379/0"     # ou CELERY_BROKER_URL
+
+# producer: retorna "enqueued" + job_id
+brain learn --expert maria --path /docs/ --sync
+
+# worker (em outro terminal/container)
+brain-worker           # ou: celery -A brain_tool.worker worker --loglevel=info
+
+# acompanhar
+brain jobs --expert maria
+```
+
+Docker (Redis + PostgreSQL + worker):
+
+```bash
+docker compose up -d
+# monta ./ingest e passa /ingest/<arquivo> no learn
+```
+
+---
+
+## Plugin Hermes (mensageria)
+
+A tool nativa `brain` (ações `remember`, `recall`, `check`, `learn`,
+`global_learn`, `jobs`, `synthesize`) é exposta ao agente via qualquer gateway
+(Telegram/WhatsApp/…). Ações que absorvem conhecimento exigem `admin_id`
+autorizado (`~/.hermes/brain/admins.json`) — spec §5.
+
+```bash
+hermes plugins install vitorluiz/brain-framework --enable
+hermes plugins doctor . --ci   # validação local
+```
+
+---
+
+## `brain` — Gestor do sistema
+
+### Profiles
+
+```bash
+brain add profile <nome>       # hermes profile create + brain.db + alias no ~/.bashrc
+brain list profiles            # lista experts (pastas na raiz do brain) com contagem
+brain remove profile <nome>    # remove brain.db + diretório + alias (confirma em TTY)
+brain remove profile <nome> --yes   # remove sem confirmação
+```
+
+### Global
+
+```bash
+brain global learn --content "Horário: 8h-18h" --title "Horário" [--sync] [--dry-run]
+brain global learn --path /documentos/gerais/ [--sync] [--dry-run]
+```
+
+### Gestão
+
+```bash
+brain backup          # backup de global + experts → backups/backup_<ts>/ + manifest.json
+brain restore --list  # lista backups disponíveis
+brain restore --from <ts> [--expert <n> | --global] [--yes]   # restaura de um backup
+brain update          # git pull origin main no diretório do framework
+brain sync all        # sync (staging → pages) de global + todos os experts
+brain verify          # integridade dos checkpoints assinados (todos os scopes)
+brain log --scope S   # histórico de commits (global ou expert/<nome>)
+brain diff --scope S  # diferença de árvore entre commits (add/remove/change)
+brain approve --scope S --candidate C [--policy P] [--note N]
+brain merge --scope S --candidate JOB   # publica um candidato (learn) na main
+brain rollback --scope S --to C [--yes]   # move main para commit anterior
+```
+
+O `restore` localiza o backup pelo timestamp (ou caminho do diretório), copia os
+`brain.db` de volta e, antes de sobrescrever, preserva o estado atual em
+`<brain.db>.pre-restore-<ts>`. Sem `--yes`, pede confirmação.
+
+### Administradores
+
+```bash
+brain admin list
+brain admin add whatsapp <numero>
+brain admin add cli <username>
+brain admin add grupo <grupo> <membro>
+brain admin remove <identificador>
+```
+
+A lista fica em `~/.hermes/brain/admins.json`. No contexto WhatsApp, o Hermes
+Gateway valida os 3 critérios (lista + membro do grupo + admin do grupo) usando
+as funções `is_admin()` / `is_group_member()` expostas por `brain_tool.brain`.
+
+---
+
+## Comandos de conhecimento (disponíveis em `brain` e `brain-tool`)
+
+Todo comando aceita `--expert <nome>` (ou `--global`) e opcionalmente
+`--brain-path <caminho>` para apontar um `brain.db` explícito.
+
+```bash
+# Inicializar um brain.db (cria schema + entrada inicial)
+brain init --name maria
+brain init --name maria --global
+
+# CRUD
+brain remember --expert maria --tipo fact --title "Título" --content "Conteúdo" [--dry-run]
+brain recall   --expert maria [--search termo] [--limit 10] [--offset 0]
+brain forget   --expert maria --id 5 [--dry-run]
+brain synthesize   --expert maria [--type summary]
+brain consolidate  --expert maria [--dry-run]
+
+# Ingestão (learn propõe; --sync publica na hora)
+brain learn --expert maria --path /caminho/arquivo_ou_dir [--sync] [--dry-run]
+# sem --sync: fica em quarentena — publique com `brain merge --scope expert/maria --candidate <job_id>`
+brain sync-tb --expert maria   # move staging → pages (idempotente por hash)
+
+# Diagnóstico
+brain check --expert maria      # PRAGMA integrity_check + schema version + contagens
+brain jobs  --expert maria [--status completed] [--limit 20]
+
+# Taxonomia
+brain taxonomist --expert maria [--limit 10]
+brain capture --expert maria --type fact --content "Texto"
+```
+
+### Formatos suportados pelo `learn`
+
+`.txt`, `.md`, `.pdf`, `.docx`, `.doc`, `.xlsx`, `.xls`, `.csv`.
+Para PDF/DOCX/planilhas, instale as dependências opcionais:
+
+```bash
+pip install -e ".[learn]"   # pypdf, python-docx, pandas, openpyxl
+```
+
+Arquivos grandes são divididos em chunks (spec §4.2) antes de ir ao staging;
+cada chunk recebe seu próprio hash canônico (SHA-256).
+
+### Hash canônico e idempotência (spec §4.3)
+
+O `sync` verifica o `hash_canonical` antes de mover um chunk do staging para
+`pages`; se o hash já existe, pula. Aprender o mesmo arquivo duas vezes não
+duplica conhecimento.
+
+### Jobs (spec §4.5)
+
+O `learn` registra um job em `jobs` com ciclo `enqueued → processing → completed`
+(ou `failed`). Com Celery + Redis configurados (`REDIS_URL`/`CELERY_BROKER_URL`),
+a ingestão roda **assíncrona** no worker; sem broker, roda **síncrona** no
+próprio processo (fallback — spec §4.6).
+
+---
+
+## Checkpoints assinados (governança — Fases 1–4)
+
+Toda escrita (`remember`, `forget`, `sync`) cria um **commit assinado** (Ed25519)
+e avança a ref `main` do scope (`global` ou `expert/<nome>`). A chave é gerada
+automaticamente no primeiro uso em `$BRAIN_ROOT/.signing/` (ou injetada via
+`BRAIN_SIGNING_KEY` / `BRAIN_SIGNING_KEY_PUB`).
+
+```bash
+brain verify [--scope global|expert/<nome>]   # valida cadeia + assinaturas + conteúdo
+brain log --scope expert/maria               # histórico de commits (mais novo primeiro)
+brain diff --scope expert/maria              # add/remove/change entre main e o parent
+brain approve --scope expert/maria --candidate <commit> [--policy P] [--note N] [--actor A]
+brain merge --scope expert/maria --candidate <job_id> [--actor A]   # publica um candidato
+brain rollback --scope expert/maria --to <commit> [--yes] [--actor A]  # move main, não apaga
+brain promote --from expert/maria --to global [--objects H1,H2] [--message M] [--actor A]
+```
+
+**Quarentena (Fase 3)**: `brain learn --path X` **sem** `--sync` cria um commit
+**candidato** (`refs[<scope>/candidate/<job_id>]`) e **não publica** — o conteúdo
+fica invisível ao recall até `brain merge`. `--sync` = aprovação implícita
+(publica na hora). Todo conteúdo importado passa por **scan de conteúdo suspeito**
+(instruções/credenciais/PII) gravado no candidato, e PDF/DOCX/planilhas são
+extraídos em **subprocesso isolado** (limites de CPU/memória/tempo) com
+verificação de MIME e tamanho máximo.
+
+`verify` detecta adulteração (conteúdo, campos do commit, assinatura); `check`
+também recalcula o `hash_canonical` das páginas legadas (ponte). `rollback` é
+não-destrutivo. Commits são referenciáveis por id completo ou prefixo único.
+Páginas migradas de antes dos checkpoints entram como commit *genesis* com
+`integrity: unverified` — sem garantia retroativa.
+
+> Design completo e fases: `plan/checkpoints-assinados.md`. Fases 1–4
+> implementadas.
+
+**Promoção + dupla aprovação (Fase 4)**: `brain promote` propõe levar
+conhecimento de um expert para o global como um commit **candidato** marcado
+`requires_dual_approval` — ele **não publica**. Para publicar, são necessárias
+**2 aprovações de admins distintos** antes do `merge`:
+
+```bash
+brain approve --scope global --candidate <commit> --actor <admin-1>
+brain approve --scope global --candidate <commit> --actor <admin-2>
+brain merge   --scope global --candidate <candidate_id>
+```
+
+**RBAC (papéis)**: `admins.json` aceita `"roles": {"<id>": "admin"|"approver"}`.
+`admin` escreve no conhecimento (remember/learn/sync/merge/rollback/promote);
+`approver` só registra aprovações/rejeições. Gerencie com
+`brain admin role <id> <admin|approver>` (e `brain admin list` mostra os papéis).
+Identificadores locais de confiança (`cli:local`, `cli:root`) passam sem
+checagem; chamadores remotos (plugin/gateway/dashboard) são validados por papel.
+
+---
+
+## Segurança (spec §5)
+
+- **Knowledge absorption é admin-only**: no CLI, o acesso ao servidor já é o
+  controle de acesso (spec §5.2).
+- No WhatsApp, a validação de admin é feita pelo Hermes Gateway usando
+  `admins.json` + os helpers `is_admin`/`is_group_member` (spec §5.3).
+- O `brain.db` é criado com permissões privadas (`0700` diretórios, `0600` DB).
