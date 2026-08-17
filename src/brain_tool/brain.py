@@ -1349,7 +1349,7 @@ def cmd_promote(args) -> int:
 
 
 def cmd_update(args) -> int:
-    """Atualiza o Brain Framework via git pull."""
+    """Atualiza o Brain Framework via git pull e verifica o build."""
     # Lê versão atual antes do update
     current_version = __version__
     print(f"\n=== Brain: Atualizando framework ===")
@@ -1377,6 +1377,21 @@ def cmd_update(args) -> int:
             print(f"=== Version: {new_version}")
             if new_version != current_version:
                 print(f"  (atualizado de {current_version} para {new_version})")
+            # Verificação rápida de saúde (import + testes de unidade)
+            print("\n=== Verificando build ===")
+            verify_result = subprocess.run(
+                [sys.executable, "-m", "pytest", "tests/test_dashboard.py", "-q", "--tb=no"],
+                cwd=PROJECT_ROOT,
+                capture_output=True,
+                text=True,
+                timeout=120
+            )
+            if verify_result.returncode == 0:
+                print("= Build OK (testes dashboard passaram)")
+            else:
+                print("= ATENÇÃO: testes falharam")
+                print(verify_result.stdout)
+                print(verify_result.stderr)
             return 0
         else:
             # Se falhou (ex: conflitos), tenta merge simples como fallback
