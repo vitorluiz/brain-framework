@@ -35,11 +35,13 @@ Uso:
   brain approve --scope ...    - Registra aprovação/rejeição de um commit
   brain rollback --scope ...   - Move main para um commit anterior
   brain merge --scope ...      - Publica um candidato (quarentena) na main
+  brain promote --from ...     - Propõe promoção entre scopes (dupla aprovação)
   brain update                  - Atualiza framework
   brain sync all               - Sync de todos os brains
   brain admin list             - Lista administradores
   brain admin add TYPE ID      - Adiciona administrador
   brain admin remove ID        - Remove administrador
+  brain admin role ID ROLE     - Define papel RBAC (admin | approver)
 """
 
 import argparse
@@ -66,9 +68,13 @@ from brain_tool import (
 )
 from brain_tool.auth import (
     admin_config_file, load_admins, save_admins, is_admin, is_group_member,
+    ROLE_ADMIN, ROLE_APPROVER, role_for,
 )
 from brain_tool.db import dispose_engine_for_path
-from brain_tool.checkpoints import verify_scope, history, diff, approve, rollback, merge_candidate
+from brain_tool.checkpoints import (
+    verify_scope, history, diff, approve, rollback, merge_candidate,
+    promote_into, read_scope_entries,
+)
 
 # === (fallback sqlite3 legado descontinuado — brain_tool sempre importável) ===
 if False:
@@ -1116,17 +1122,29 @@ def cmd_restore(args) -> int:
     return 0 if results else 1
 
 
+def _scope_db_path(scope: str) -> str:
+    """Caminho físico do brain.db de um scope (`global` ou `expert/<nome>`)."""
+    if scope == "global":
+        return get_brain_db_path(global_brain=True)
+    if scope.startswith("expert/"):
+        return get_brain_db_path(expert=scope[len("expert/"):])
+    raise ValueError(f"scope invalido: {scope} (use 'global' ou 'expert/<nome>')")
+
+
 def _open_scope_session(scope: str):
     """Abre uma Session para um scope (`global` ou `expert/<nome>`)."""
-    if scope == "global":
-        bp = get_brain_db_path(global_brain=True)
-    elif scope.startswith("expert/"):
-        bp = get_brain_db_path(expert=scope[len("expert/"):])
-    else:
-        raise ValueError(f"scope invalido: {scope} (use 'global' ou 'expert/<nome>')")
+    bp = _scope_db_path(scope)
     if not os.path.exists(bp):
         return None
     return get_db_connection(bp)
+
+
+def _open_scope_session_or_create(scope: str):
+    """Como `_open_scope_session`, mas cria o brain.db se ainda não existir."""
+    existing = _open_scope_session(scope)
+    if existing is not None:
+        return existing
+    return get_db_connection(_scope_db_path(scope))
 
 
 def cmd_verify(args) -> int:
@@ -1214,14 +1232,15 @@ def cmd_approve(args) -> int:
         print(f"Scope {scope} sem brain.db.", file=sys.stderr)
         return 1
     decision = "reject" if getattr(args, "reject", False) else "approve"
+    approver = getattr(args, "actor", None) or "cli:local"
     try:
-        aid = approve(conn, scope, args.candidate, "cli:local",
+        aid = approve(conn, scope, args.candidate, approver,
                       policy=getattr(args, "policy", "manual"),
                       decision=decision,
                       justification=getattr(args, "note", None))
     finally:
         conn.close()
-    print(f"\n= {decision} registrada (id={aid}) — {args.candidate[:12]}")
+    print(f"\n= {decision} registrada (id={aid}) por {approver} — {args.candidate[:12]}")
     return 0
 
 
@@ -1232,6 +1251,7 @@ def cmd_rollback(args) -> int:
     if conn is None:
         print(f"Scope {scope} sem brain.db.", file=sys.stderr)
         return 1
+    author = getattr(args, "actor", None) or "cli:local"
     if not getattr(args, "yes", False):
         try:
             resp = input(f"\nMover main de {scope} para {args.to[:12]}? [s/N] ")
@@ -1242,7 +1262,7 @@ def cmd_rollback(args) -> int:
             conn.close()
             return 1
     try:
-        result = rollback(conn, scope, args.to, "cli:local")
+        result = rollback(conn, scope, args.to, author)
     finally:
         conn.close()
     if not result.get("ok"):
@@ -1259,14 +1279,58 @@ def cmd_merge(args) -> int:
     if conn is None:
         print(f"Scope {scope} sem brain.db.", file=sys.stderr)
         return 1
+    author = getattr(args, "actor", None) or "cli:local"
     try:
-        result = merge_candidate(conn, scope, args.candidate, "cli:local")
+        result = merge_candidate(conn, scope, args.candidate, author)
     finally:
         conn.close()
     if not result.get("ok"):
         print(f"Erro: {result.get('error')}", file=sys.stderr)
         return 1
     print(f"\n= Merge concluido — {scope} -> {result['commit'][:16]}...")
+    return 0
+
+
+def cmd_promote(args) -> int:
+    """Propõe promoção de conhecimento entre scopes (dupla aprovação)."""
+    from_scope = args.from_scope
+    to_scope = args.to_scope
+    if from_scope == to_scope:
+        print("Erro: origem e destino devem ser diferentes.", file=sys.stderr)
+        return 1
+    author = getattr(args, "actor", None) or "cli:local"
+    object_hashes = [h.strip() for h in args.objects.split(",")] if args.objects else None
+
+    src = _open_scope_session(from_scope)
+    if src is None:
+        print(f"Scope origem {from_scope} sem brain.db.", file=sys.stderr)
+        return 1
+    try:
+        entries, missing = read_scope_entries(src, from_scope, object_hashes)
+    finally:
+        src.close()
+    if not entries:
+        print("Erro: nenhum objeto a promover.", file=sys.stderr)
+        if missing:
+            print(f"  objetos não encontrados na origem: {missing}", file=sys.stderr)
+        return 1
+
+    dst = _open_scope_session_or_create(to_scope)
+    try:
+        result = promote_into(dst, to_scope, entries, from_scope, author,
+                              message=getattr(args, "message", None))
+    finally:
+        dst.close()
+
+    print(f"\n=== Promoção proposta — {from_scope} -> {to_scope} ===")
+    print(f"  candidato: {result['candidate_id']}  ({result['objects']} objetos)")
+    print(f"  commit:    {result['candidate']}")
+    if missing:
+        print(f"  (ignorados — não existem na origem): {missing}")
+    print("\n  Para publicar (exige 2 aprovações de admins distintos):")
+    print(f"    brain approve --scope {to_scope} --candidate {result['candidate']} --actor <admin-1>")
+    print(f"    brain approve --scope {to_scope} --candidate {result['candidate']} --actor <admin-2>")
+    print(f"    brain merge   --scope {to_scope} --candidate {result['candidate_id']}")
     return 0
 
 
@@ -1333,10 +1397,17 @@ def cmd_sync_all(args) -> int:
 def cmd_admin_list(args) -> int:
     """Lista administradores configurados."""
     admins = load_admins()
+    roles = admins.get("roles", {})
     print(f"\n=== Administradores ===")
     print(f"Admins globais ({len(admins.get('admins', []))}):")
     for a in admins.get("admins", []):
-        print(f"  - {a}")
+        r = roles.get(a, ROLE_ADMIN)
+        print(f"  - {a}  [role: {r}]")
+    extras = [i for i in roles if i not in admins.get("admins", [])]
+    if extras:
+        print(f"Principais com papel explícito (fora da lista de admins):")
+        for i in extras:
+            print(f"  - {i}  [role: {roles[i]}]")
     print(f"\nGrupos administrativos:")
     for g, m in admins.get("groups", {}).items():
         if m:
@@ -1400,6 +1471,16 @@ def cmd_admin_remove(args) -> int:
 
     print(f"Admin nao encontrado: {identifier}", file=sys.stderr)
     return 1
+
+
+def cmd_admin_role(args) -> int:
+    """Define o papel (RBAC) de um principal em admins.json."""
+    admins = load_admins()
+    roles = admins.setdefault("roles", {})
+    roles[args.identifier] = args.role
+    save_admins(admins)
+    print(f"+ Papel '{args.role}' definido para '{args.identifier}'")
+    return 0
 
 
 # === Comandos do brain_tool (integrados no Brain) ===
@@ -1672,14 +1753,16 @@ Comandos de Gestão:
   verify [--scope S]   - Verifica integridade dos checkpoints assinados
   log --scope S        - Histórico de commits (global ou expert/<nome>)
   diff --scope S       - Diferença de árvore entre commits (add/remove/change)
-  approve --scope S    - Registra aprovação/rejeição de um commit
+  approve --scope S    - Registra aprovação/rejeição de um commit (--actor)
   rollback --scope S   - Move main para commit anterior (não destrutivo)
   merge --scope S      - Publica um candidato (learn) na main, após aprovação
+  promote --from S     - Propõe promoção entre scopes (exige dupla aprovação)
   update               - Atualiza o framework via git pull origin main
   sync all             - Faz sync de todos os brains
-  admin list           - Lista administradores configurados
+  admin list           - Lista administradores configurados (com papéis)
   admin add TYPE ID    - Adiciona administrador (whatsapp/cli/grupo)
   admin remove ID      - Remove administrador
+  admin role ID ROLE   - Define papel RBAC (admin | approver)
   dashboard            - Dashboard web (serve/add-user/list-users/remove-user)
 
 Comandos de Conhecimento (via brain_tool):
@@ -1769,19 +1852,32 @@ Para conhecer mais:
     p_approve.add_argument('--candidate', required=True, help='Commit a aprovar/rejeitar')
     p_approve.add_argument('--policy', default='manual', help='Política aplicada (default: manual)')
     p_approve.add_argument('--note', help='Justificativa')
+    p_approve.add_argument('--actor', help='Identificador do aprovador (default: cli:local)')
     p_approve.add_argument('--reject', action='store_true', help='Registra rejeição em vez de aprovação')
     p_approve.set_defaults(func=lambda args: cmd_approve(args))
 
     p_rollback = sp.add_parser('rollback', help='Move a ref main para um commit anterior (não destrutivo)')
     p_rollback.add_argument('--scope', required=True, help='Scope (global ou expert/<nome>)')
     p_rollback.add_argument('--to', required=True, help='Commit de destino')
+    p_rollback.add_argument('--actor', help='Identificador do autor (default: cli:local)')
     p_rollback.add_argument('--yes', action='store_true', help='Sem confirmação')
     p_rollback.set_defaults(func=lambda args: cmd_rollback(args))
 
     p_merge = sp.add_parser('merge', help='Publica um candidato (learn) na main, após aprovação')
     p_merge.add_argument('--scope', required=True, help='Scope (global ou expert/<nome>)')
-    p_merge.add_argument('--candidate', required=True, help='job_id do candidato (retornado pelo learn)')
+    p_merge.add_argument('--candidate', required=True, help='job_id do candidato (retornado pelo learn/promote)')
+    p_merge.add_argument('--actor', help='Identificador do autor (default: cli:local)')
     p_merge.set_defaults(func=lambda args: cmd_merge(args))
+
+    p_promote = sp.add_parser('promote', help='Propõe promoção entre scopes (exige dupla aprovação)')
+    p_promote.add_argument('--from', dest='from_scope', required=True,
+                           help='Scope origem (expert/<nome>)')
+    p_promote.add_argument('--to', dest='to_scope', required=True,
+                           help='Scope destino (global ou expert/<nome>)')
+    p_promote.add_argument('--objects', help='Hashes específicos a promover (separados por vírgula); default: todos')
+    p_promote.add_argument('--message', help='Mensagem da promoção')
+    p_promote.add_argument('--actor', help='Identificador do autor (default: cli:local)')
+    p_promote.set_defaults(func=lambda args: cmd_promote(args))
 
     p_update = sp.add_parser('update', help='Atualiza o framework')
     p_update.set_defaults(func=lambda args: cmd_update(args))
@@ -1807,6 +1903,12 @@ Para conhecer mais:
     p_admin_remove = p_admin_sub.add_parser('remove', help='Remove administrador')
     p_admin_remove.add_argument('identifier', help='Identificador')
     p_admin_remove.set_defaults(func=lambda args: cmd_admin_remove(args))
+
+    p_admin_role = p_admin_sub.add_parser('role', help='Define o papel (RBAC) de um principal')
+    p_admin_role.add_argument('identifier', help='Identificador do principal')
+    p_admin_role.add_argument('role', choices=[ROLE_ADMIN, ROLE_APPROVER],
+                              help='Papel: admin (escritas) ou approver (só aprovar)')
+    p_admin_role.set_defaults(func=lambda args: cmd_admin_role(args))
 
     # --- SOUL.md / brain (LLM) ---
     p_soul = sp.add_parser('soul', help='Gerencia o SOUL.md (persona) de um profile')
