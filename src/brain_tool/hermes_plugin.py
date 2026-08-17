@@ -12,7 +12,6 @@ import json
 from typing import Any, Optional
 
 from brain_tool import brain_tool as core
-from brain_tool.brain import is_admin
 
 _ADMIN_ACTIONS = {"remember", "learn", "global_learn"}
 
@@ -67,8 +66,9 @@ def _err(action: str, message: str, code: str = "error") -> str:
     )
 
 
-def _require_admin(action: str, admin_id: Optional[str]) -> Optional[str]:
-    if not admin_id or not is_admin(admin_id):
+def _require_admin_id(action: str, admin_id: Optional[str]) -> Optional[str]:
+    """Exige a presença de `admin_id`; a validação real é feita pelo core."""
+    if not admin_id:
         return _err(action, "Comando restrito a administradores.", "forbidden")
     return None
 
@@ -80,7 +80,7 @@ def _handle_brain(ctx, args: dict, **kw) -> str:
 
     try:
         if action in _ADMIN_ACTIONS:
-            denied = _require_admin(action, admin_id)
+            denied = _require_admin_id(action, admin_id)
             if denied:
                 return denied
 
@@ -89,7 +89,7 @@ def _handle_brain(ctx, args: dict, **kw) -> str:
                 return _err(action, "content é obrigatório para remember.", "validation")
             conn = core.get_session(expert=expert)
             res = core.remember(conn, expert, args.get("tipo") or "memory",
-                                args.get("title"), args["content"])
+                                args.get("title"), args["content"], actor=admin_id)
             conn.close()
             return _merge_result("remember", res)
 
@@ -121,17 +121,19 @@ def _handle_brain(ctx, args: dict, **kw) -> str:
             if not args.get("path"):
                 return _err(action, "path é obrigatório para learn.", "validation")
             conn = core.get_session(expert=expert)
-            res = core.learn(conn, expert, args["path"], sync_immediately=bool(args.get("sync")))
+            res = core.learn(conn, expert, args["path"], sync_immediately=bool(args.get("sync")),
+                             actor=admin_id)
             conn.close()
             return _merge_result("learn", res)
 
         if action == "global_learn":
             conn = core.get_session(global_brain=True)
             if args.get("path"):
-                res = core.learn(conn, "global", args["path"], sync_immediately=bool(args.get("sync")))
+                res = core.learn(conn, "global", args["path"], sync_immediately=bool(args.get("sync")),
+                                 actor=admin_id)
             elif args.get("content"):
                 res = core.remember(conn, "global", "global_policy",
-                                    args.get("title"), args["content"])
+                                    args.get("title"), args["content"], actor=admin_id)
             else:
                 conn.close()
                 return _err(action, "informe path ou content.", "validation")
@@ -139,6 +141,8 @@ def _handle_brain(ctx, args: dict, **kw) -> str:
             return _merge_result("global_learn", res)
 
         return _err(action, f"Ação desconhecida: {action!r}", "validation")
+    except PermissionError:
+        return _err(action, "Comando restrito a administradores.", "forbidden")
     except Exception as e:  # noqa: BLE001 — tool handler deve nunca vazar traceback
         return _err(action, f"{type(e).__name__}: {e}")
 

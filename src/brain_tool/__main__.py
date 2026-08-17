@@ -2,7 +2,7 @@
 
 import sys
 
-from brain_tool.brain_tool import main
+from brain_tool.brain import main
 
 if __name__ == "__main__":
     sys.exit(main())

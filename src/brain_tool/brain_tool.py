@@ -7,13 +7,11 @@ ou PostgreSQL compartilhado (via DATABASE_URL), transparente para o chamador.
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import ipaddress
 import json
 import os
 import socket
-import sys
 import urllib.parse
 import urllib.request
 from datetime import datetime
@@ -35,6 +33,8 @@ from .db import (
     validate_expert_identifier,
 )
 from .models import Job, KnowledgeStaging, Page
+
+from .auth import require_admin
 
 __version__ = "1.2.0"
 
@@ -62,7 +62,9 @@ def _page_dict(p: Page) -> Dict[str, Any]:
 
 # --- CRUD -------------------------------------------------------------------
 
-def remember(conn, expert, tipo, titulo=None, corpo="", hash_canonical=None, dry_run=False):
+def remember(conn, expert, tipo, titulo=None, corpo="", hash_canonical=None, dry_run=False,
+             actor=None):
+    require_admin(actor)
     if dry_run:
         return {
             "action": "remember (dry-run)",
@@ -93,7 +95,8 @@ def recall(conn, expert, search_term=None, limit=10, offset=0):
     return [_page_dict(p) for p in conn.scalars(q).all()]
 
 
-def forget(conn, expert, page_id, dry_run=False):
+def forget(conn, expert, page_id, dry_run=False, actor=None):
+    require_admin(actor)
     page = conn.get(Page, page_id)
     if dry_run:
         if page and page.expert == expert:
@@ -127,7 +130,8 @@ def synthesize(conn, expert, synthesis_type="summary", limit=20):
             "synthesis": sintese}
 
 
-def consolidate(conn, expert, threshold=0.8, dry_run=False):
+def consolidate(conn, expert, threshold=0.8, dry_run=False, actor=None):
+    require_admin(actor)
     pages = conn.scalars(
         select(Page).where(Page.expert == expert)
         .order_by(Page.hash_canonical, Page.created_at.asc())
@@ -448,12 +452,13 @@ def _async_enabled() -> bool:
         return False
 
 
-def learn(conn, expert, file_path, sync_immediately=False, dry_run=False):
+def learn(conn, expert, file_path, sync_immediately=False, dry_run=False, actor=None):
     """Ingere arquivo/diretório/URL no staging (spec §4.2).
 
     Assíncrono (Celery/Redis) quando o broker está configurado; caso contrário,
     fallback síncrono (spec §4.6).
     """
+    require_admin(actor)
     s = str(file_path)
     is_url = s.startswith(("http://", "https://"))
 
@@ -491,7 +496,8 @@ def learn(conn, expert, file_path, sync_immediately=False, dry_run=False):
     return result
 
 
-def sync(conn, expert, staging_id=None):
+def sync(conn, expert, staging_id=None, actor=None):
+    require_admin(actor)
     if staging_id:
         s = conn.get(KnowledgeStaging, staging_id)
         if not s or s.expert != expert:
@@ -611,266 +617,5 @@ def suggest_taxonomy_rules(conn, expert, limit=10):
                             "Adicione metadados (tags, origem)"]}
 
 
-def capture_taxonomy(conn, expert, content, suggested_type):
-    return remember(conn, expert, suggested_type, None, content)
-
-
-# === CLI Commands ============================================================
-
-def cmd_init(args):
-    db_path = get_brain_db_path(expert=args.name, global_brain=args.global_brain,
-                                brain_path=args.brain_path)
-    conn = get_db_connection(db_path)
-    ename = "global" if args.global_brain else args.name
-    remember(conn, ename, "system", "Brain inicializado",
-             f"Brain {ename} inicializado em {datetime.now().isoformat()}")
-    conn.close()
-    print(json.dumps({"action": "init", "expert": ename, "db_path": db_path,
-                      "schema_version": SCHEMA_VERSION, "initialized": True},
-                     indent=2, ensure_ascii=False))
-    return 0
-
-
-def cmd_remember(args):
-    db_path = get_brain_db_path(expert=args.expert, global_brain=args.global_brain,
-                                brain_path=args.brain_path)
-    conn = get_db_connection(db_path)
-    ename = "global" if args.global_brain else args.expert
-    print(json.dumps(remember(conn, ename, args.tipo, args.title, args.content,
-                              dry_run=args.dry_run), indent=2, ensure_ascii=False))
-    conn.close()
-    return 0
-
-
-def cmd_recall(args):
-    db_path = get_brain_db_path(expert=args.expert, global_brain=args.global_brain,
-                                brain_path=args.brain_path)
-    conn = get_db_connection(db_path)
-    ename = "global" if args.global_brain else args.expert
-    print(json.dumps(recall(conn, ename, args.search, args.limit, args.offset),
-                     indent=2, ensure_ascii=False))
-    conn.close()
-    return 0
-
-
-def cmd_forget(args):
-    db_path = get_brain_db_path(expert=args.expert, global_brain=args.global_brain,
-                                brain_path=args.brain_path)
-    conn = get_db_connection(db_path)
-    ename = "global" if args.global_brain else args.expert
-    print(json.dumps(forget(conn, ename, args.id, dry_run=args.dry_run),
-                     indent=2, ensure_ascii=False))
-    conn.close()
-    return 0
-
-
-def cmd_synthesize(args):
-    db_path = get_brain_db_path(expert=args.expert, global_brain=args.global_brain,
-                                brain_path=args.brain_path)
-    conn = get_db_connection(db_path)
-    ename = "global" if args.global_brain else args.expert
-    print(json.dumps(synthesize(conn, ename, args.type), indent=2, ensure_ascii=False))
-    conn.close()
-    return 0
-
-
-def cmd_consolidate(args):
-    db_path = get_brain_db_path(expert=args.expert, global_brain=args.global_brain,
-                                brain_path=args.brain_path)
-    conn = get_db_connection(db_path)
-    ename = "global" if args.global_brain else args.expert
-    print(json.dumps(consolidate(conn, ename, args.threshold, dry_run=args.dry_run),
-                     indent=2, ensure_ascii=False))
-    conn.close()
-    return 0
-
-
-def cmd_learn(args):
-    db_path = get_brain_db_path(expert=args.expert, global_brain=args.global_brain,
-                                brain_path=args.brain_path)
-    conn = get_db_connection(db_path)
-    ename = "global" if args.global_brain else args.expert
-    print(json.dumps(learn(conn, ename, args.path, args.sync, dry_run=args.dry_run),
-                     indent=2, ensure_ascii=False))
-    conn.close()
-    return 0
-
-
-def cmd_sync(args):
-    db_path = get_brain_db_path(expert=args.expert, global_brain=args.global_brain,
-                                brain_path=args.brain_path)
-    conn = get_db_connection(db_path)
-    ename = "global" if args.global_brain else args.expert
-    print(json.dumps(sync(conn, ename), indent=2, ensure_ascii=False))
-    conn.close()
-    return 0
-
-
-def cmd_check(args):
-    db_path = get_brain_db_path(expert=args.expert, global_brain=args.global_brain,
-                                brain_path=args.brain_path)
-    conn = get_db_connection(db_path)
-    ename = "global" if args.global_brain else args.expert
-    print(json.dumps(check(conn, ename), indent=2, ensure_ascii=False))
-    conn.close()
-    return 0
-
-
-def cmd_jobs(args):
-    db_path = get_brain_db_path(expert=args.expert, global_brain=args.global_brain,
-                                brain_path=args.brain_path)
-    conn = get_db_connection(db_path)
-    ename = "global" if args.global_brain else args.expert
-    print(json.dumps(list_jobs(conn, ename, args.status, args.limit),
-                     indent=2, ensure_ascii=False))
-    conn.close()
-    return 0
-
-
-def cmd_taxonomist(args):
-    db_path = get_brain_db_path(expert=args.expert, global_brain=args.global_brain,
-                                brain_path=args.brain_path)
-    conn = get_db_connection(db_path)
-    ename = "global" if args.global_brain else args.expert
-    print(json.dumps(suggest_taxonomy_rules(conn, ename, args.limit),
-                     indent=2, ensure_ascii=False))
-    conn.close()
-    return 0
-
-
-def cmd_capture(args):
-    db_path = get_brain_db_path(expert=args.expert, global_brain=args.global_brain,
-                                brain_path=args.brain_path)
-    conn = get_db_connection(db_path)
-    ename = "global" if args.global_brain else args.expert
-    print(json.dumps(capture_taxonomy(conn, ename, args.content, args.type),
-                     indent=2, ensure_ascii=False))
-    conn.close()
-    return 0
-
-
-def main():
-    parser = argparse.ArgumentParser(
-        description="Brain Tool CLI - Manipulacao do brain.db",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Comandos:
-  init           - Inicializa um novo brain.db
-  remember       - Adiciona conhecimento
-  recall         - Recupera conhecimento
-  forget         - Remove conhecimento (use --dry-run primeiro!)
-  synthesize     - Gera sintese
-  consolidate    - Deduplica conhecimento (use --dry-run primeiro!)
-  learn          - Processa arquivo/diretorio para staging
-  sync           - Move staging para tabela principal
-  check          - Verifica integridade + schema version
-  jobs           - Lista jobs
-  taxonomist     - Sugeri regras de taxonomia
-  capture        - Captura classificacao de taxonomia
-
-Targeting:
-  --expert NAME     Operar sobre brain.db de um expert
-  --brain-path PATH Caminho explicito para o brain.db
-  --global          Operar sobre brain.db global
-  --dry-run         Preview sem executar
-        """)
-    parser.add_argument(
-        "--version", action="version", version=f"brain-tool {__version__}",
-        help="Exibe a versão e sai",
-    )
-    sp = parser.add_subparsers(dest='command')
-
-    p_init = sp.add_parser('init', help='Inicializa brain.db')
-    p_init.add_argument('--name', required=True)
-    p_init.add_argument('--brain-path', help='Caminho explicito para brain.db')
-    p_init.add_argument('--global', action='store_true', dest='global_brain')
-
-    p_rem = sp.add_parser('remember', help='Adiciona conhecimento')
-    p_rem.add_argument('--expert', required=True)
-    p_rem.add_argument('--tipo', required=True)
-    p_rem.add_argument('--title')
-    p_rem.add_argument('--content', required=True)
-    p_rem.add_argument('--brain-path', help='Caminho explicito para brain.db')
-    p_rem.add_argument('--global', action='store_true', dest='global_brain')
-    p_rem.add_argument('--dry-run', action='store_true')
-
-    p_rec = sp.add_parser('recall', help='Recupera conhecimento')
-    p_rec.add_argument('--expert', required=True)
-    p_rec.add_argument('--search')
-    p_rec.add_argument('--limit', type=int, default=10)
-    p_rec.add_argument('--offset', type=int, default=0)
-    p_rec.add_argument('--brain-path', help='Caminho explicito para brain.db')
-    p_rec.add_argument('--global', action='store_true', dest='global_brain')
-
-    p_for = sp.add_parser('forget', help='Remove conhecimento')
-    p_for.add_argument('--expert', required=True)
-    p_for.add_argument('--id', type=int, required=True)
-    p_for.add_argument('--brain-path', help='Caminho explicito para brain.db')
-    p_for.add_argument('--global', action='store_true', dest='global_brain')
-    p_for.add_argument('--dry-run', action='store_true')
-
-    p_syn = sp.add_parser('synthesize', help='Gera sintese')
-    p_syn.add_argument('--expert', required=True)
-    p_syn.add_argument('--type', default='summary')
-    p_syn.add_argument('--brain-path', help='Caminho explicito para brain.db')
-    p_syn.add_argument('--global', action='store_true', dest='global_brain')
-
-    p_con = sp.add_parser('consolidate', help='Deduplica conhecimento')
-    p_con.add_argument('--expert', required=True)
-    p_con.add_argument('--threshold', type=float, default=0.8)
-    p_con.add_argument('--brain-path', help='Caminho explicito para brain.db')
-    p_con.add_argument('--global', action='store_true', dest='global_brain')
-    p_con.add_argument('--dry-run', action='store_true')
-
-    p_learn = sp.add_parser('learn', help='Processa arquivo/diretorio')
-    p_learn.add_argument('--expert', required=True)
-    p_learn.add_argument('--path', required=True)
-    p_learn.add_argument('--sync', action='store_true')
-    p_learn.add_argument('--brain-path', help='Caminho explicito para brain.db')
-    p_learn.add_argument('--global', action='store_true', dest='global_brain')
-    p_learn.add_argument('--dry-run', action='store_true')
-
-    p_sync = sp.add_parser('sync', help='Sync staging para principal')
-    p_sync.add_argument('--expert', required=True)
-    p_sync.add_argument('--brain-path', help='Caminho explicito para brain.db')
-    p_sync.add_argument('--global', action='store_true', dest='global_brain')
-
-    p_chk = sp.add_parser('check', help='Verifica integridade')
-    p_chk.add_argument('--expert', required=True)
-    p_chk.add_argument('--brain-path', help='Caminho explicito para brain.db')
-    p_chk.add_argument('--global', action='store_true', dest='global_brain')
-
-    p_job = sp.add_parser('jobs', help='Lista jobs')
-    p_job.add_argument('--expert', required=True)
-    p_job.add_argument('--status')
-    p_job.add_argument('--limit', type=int, default=20)
-    p_job.add_argument('--brain-path', help='Caminho explicito para brain.db')
-    p_job.add_argument('--global', action='store_true', dest='global_brain')
-
-    p_tax = sp.add_parser('taxonomist', help='Sugeri taxonomia')
-    p_tax.add_argument('--expert', required=True)
-    p_tax.add_argument('--limit', type=int, default=10)
-    p_tax.add_argument('--brain-path', help='Caminho explicito para brain.db')
-    p_tax.add_argument('--global', action='store_true', dest='global_brain')
-
-    p_cap = sp.add_parser('capture', help='Captura taxonomia')
-    p_cap.add_argument('--expert', required=True)
-    p_cap.add_argument('--type', required=True)
-    p_cap.add_argument('--content', required=True)
-    p_cap.add_argument('--brain-path', help='Caminho explicito para brain.db')
-    p_cap.add_argument('--global', action='store_true', dest='global_brain')
-
-    args = parser.parse_args()
-    if not args.command:
-        parser.print_help()
-        return 1
-
-    cmds = {'init': cmd_init, 'remember': cmd_remember, 'recall': cmd_recall,
-            'forget': cmd_forget, 'synthesize': cmd_synthesize, 'consolidate': cmd_consolidate,
-            'learn': cmd_learn, 'sync': cmd_sync, 'check': cmd_check,
-            'jobs': cmd_jobs, 'taxonomist': cmd_taxonomist, 'capture': cmd_capture}
-    return cmds[args.command](args)
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+def capture_taxonomy(conn, expert, content, suggested_type, actor=None):
+    return remember(conn, expert, suggested_type, None, content, actor=actor)

@@ -5,17 +5,17 @@
 
 ---
 
-## Dois executáveis
+## Executáveis
 
-Após `pip install .`, dois comandos ficam disponíveis:
+Após `pip install .`, dois comandos ficam disponíveis (apontando para o mesmo CLI):
 
 | Comando | O que é | Entry point |
 |---|---|---|
 | `brain` | Gestor nativo do framework (profiles, global, backup, admin) + conhecimento | `brain_tool.brain:main` |
-| `brain-tool` | CLI core de manipulação do `brain.db` (CRUD, learn/sync, check, jobs) | `brain_tool.brain_tool:main` |
+| `brain-tool` | alias do `brain` (mantido por compatibilidade) | `brain_tool.brain:main` |
 
-Ambos aceitam `--version` e `--help`. O `brain` re-exporta todos os comandos de
-conhecimento do `brain-tool`.
+Ambos aceitam `--version` e `--help`. O `brain_tool.py` é hoje apenas a camada
+de domínio (sem CLI próprio) — todo CLI vive em `brain.py`.
 
 ---
 

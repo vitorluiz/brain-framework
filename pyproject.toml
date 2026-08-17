@@ -25,7 +25,7 @@ dashboard = ["fastapi>=0.110", "uvicorn>=0.29", "python-multipart>=0.0.9"]
 
 [project.scripts]
 brain = "brain_tool.brain:main"
-brain-tool = "brain_tool.brain_tool:main"
+brain-tool = "brain_tool.brain:main"
 brain-worker = "brain_tool.worker:main"
 brain-dashboard = "brain_tool.dashboard:main"
 

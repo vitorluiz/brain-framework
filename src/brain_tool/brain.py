@@ -57,6 +57,9 @@ from brain_tool import (
     suggest_taxonomy_rules, capture_taxonomy, count_pages,
     SCHEMA_VERSION, get_brain_root, list_expert_names,
 )
+from brain_tool.auth import (
+    admin_config_file, load_admins, save_admins, is_admin, is_group_member,
+)
 
 # === (fallback sqlite3 legado descontinuado — brain_tool sempre importável) ===
 if False:
@@ -431,27 +434,8 @@ def backups_dir() -> str:
     return os.path.join(brain_root(), "backups")
 
 
-def admin_config_file() -> str:
-    return os.path.join(brain_root(), "admins.json")
-
-
 # O "home" do framework (onde o codigo fonte mora, para git pull)
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
-def load_admins() -> Dict[str, Any]:
-    path = admin_config_file()
-    if os.path.exists(path):
-        with open(path, 'r') as f:
-            return json.load(f)
-    return {"admins": [], "groups": {}}
-
-
-def save_admins(admins: Dict[str, Any]) -> None:
-    path = admin_config_file()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w') as f:
-        json.dump(admins, f, indent=2)
 
 
 def get_expert_names() -> List[str]:
@@ -569,19 +553,6 @@ def _set_fallback_providers(profile_dir: str,
     config = _read_config_yaml(profile_dir)
     config["fallback_providers"] = entries
     return _write_config_yaml(profile_dir, config)
-
-
-def is_admin(identifier: str, admins: Optional[Dict[str, Any]] = None) -> bool:
-    """True se o identificador está na lista de administradores (spec §5.3)."""
-    data = admins if admins is not None else load_admins()
-    return identifier in data.get("admins", [])
-
-
-def is_group_member(identifier: str, group: str,
-                    admins: Optional[Dict[str, Any]] = None) -> bool:
-    """True se o identificador é membro do grupo administrativo (spec §5.3)."""
-    data = admins if admins is not None else load_admins()
-    return identifier in data.get("groups", {}).get(group, [])
 
 
 # === Comandos do Brain ===
