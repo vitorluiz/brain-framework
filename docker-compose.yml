@@ -9,13 +9,13 @@ services:
     command: ["redis-server", "--appendonly", "yes"]
 
   # Banco compartilhado para modo organização (spec §1 — escala; optional).
-  # Sem senha padrão: POSTGRES_PASSWORD é obrigatório no ambiente do host.
-  # Porta NÃO exposta ao host por padrão.
+  # Sem senha padrão: POSTGRES_PASSWORD é obrigatório no ambiente do host
+  # (configure via .env ou export no shell). Porta NÃO exposta ao host por padrão.
   postgres:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-brain}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD (sem senha padrão)}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-brain}
     volumes:
       - pg-data:/var/lib/postgresql/data
