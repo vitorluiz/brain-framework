@@ -450,7 +450,7 @@ def backups_dir() -> str:
 
 
 # O "home" do framework (onde o codigo fonte mora, para git pull)
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 
 def get_expert_names() -> List[str]:
