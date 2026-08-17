@@ -1338,8 +1338,11 @@ def cmd_update(args) -> int:
     """Atualiza o Brain Framework via git pull."""
     print(f"\n=== Brain: Atualizando framework ===")
     try:
+        # Primeiro, fetch para trazer as refs remotas
+        subprocess.run(["git", "fetch", "origin"], cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=60)
+        # Tenta pull com rebase (evita merge commit desnecessário)
         result = subprocess.run(
-            ["git", "pull", "origin", "main"],
+            ["git", "pull", "--rebase", "origin", "main"],
             cwd=PROJECT_ROOT,
             capture_output=True,
             text=True,
@@ -1351,8 +1354,23 @@ def cmd_update(args) -> int:
                 print(result.stdout)
             return 0
         else:
-            print(f"Erro: {result.stderr}", file=sys.stderr)
-            return 1
+            # Se falhou (ex: conflitos), tenta merge simples como fallback
+            print("  (rebase falhou, tentando merge...)", file=sys.stderr)
+            result2 = subprocess.run(
+                ["git", "pull", "--no-rebase", "origin", "main"],
+                cwd=PROJECT_ROOT,
+                capture_output=True,
+                text=True,
+                timeout=120
+            )
+            if result2.returncode == 0:
+                print("= Framework atualizado (via merge)!")
+                if result2.stdout:
+                    print(result2.stdout)
+                return 0
+            else:
+                print(f"Erro: {result2.stderr}", file=sys.stderr)
+                return 1
     except Exception as e:
         print(f"Erro: {e}", file=sys.stderr)
         return 1
