@@ -1336,7 +1336,10 @@ def cmd_promote(args) -> int:
 
 def cmd_update(args) -> int:
     """Atualiza o Brain Framework via git pull."""
+    # Lê versão atual antes do update
+    current_version = __version__
     print(f"\n=== Brain: Atualizando framework ===")
+    print(f"=== Version: {current_version}")
     try:
         # Primeiro, fetch para trazer as refs remotas
         subprocess.run(["git", "fetch", "origin"], cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=60)
@@ -1352,6 +1355,14 @@ def cmd_update(args) -> int:
             print("= Framework atualizado!")
             if result.stdout and "Already up to date" not in result.stdout:
                 print(result.stdout)
+            # Recarrega módulo para pegar nova versão
+            import importlib
+            import brain_tool
+            importlib.reload(brain_tool)
+            new_version = brain_tool.__version__
+            print(f"=== Version: {new_version}")
+            if new_version != current_version:
+                print(f"  (atualizado de {current_version} para {new_version})")
             return 0
         else:
             # Se falhou (ex: conflitos), tenta merge simples como fallback
@@ -1367,6 +1378,13 @@ def cmd_update(args) -> int:
                 print("= Framework atualizado (via merge)!")
                 if result2.stdout:
                     print(result2.stdout)
+                import importlib
+                import brain_tool
+                importlib.reload(brain_tool)
+                new_version = brain_tool.__version__
+                print(f"=== Version: {new_version}")
+                if new_version != current_version:
+                    print(f"  (atualizado de {current_version} para {new_version})")
                 return 0
             else:
                 print(f"Erro: {result2.stderr}", file=sys.stderr)
