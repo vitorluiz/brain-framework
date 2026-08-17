@@ -57,12 +57,56 @@ def is_group_member(identifier: str, group: str,
     return identifier in data.get("groups", {}).get(group, [])
 
 
-def require_admin(actor: Optional[str]) -> None:
-    """Exige que `actor` seja admin, ou levanta PermissionError.
+# --- RBAC (roles) — Fase 4 ----------------------------------------------------
 
-    `actor=None` significa chamador local de confiança (CLI) — sem checagem.
-    Chamadores remotos devem passar um identificador; este é validado contra
-    `admins.json`.
+ROLE_ADMIN = "admin"
+ROLE_APPROVER = "approver"
+
+# Identificadores "locais de confiança" — o CLI/gestor nativo. Passam qualquer
+# checagem (o operador do host é o dono da chave de assinatura). Chamadores
+# remotos (plugin/gateway/dashboard) passam um identificador real e são
+# validados contra `admins.json` + `roles`.
+_LOCAL_TRUSTED = {"cli:local", "cli:root", "cli:migration"}
+
+
+def role_for(identifier: Optional[str],
+             admins: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """Papel de um principal. `None` se não reconhecido.
+
+    Ordem de resolução: `roles` (explícito) → lista `admins` (default `admin`).
     """
-    if actor is not None and not is_admin(actor):
-        raise PermissionError("Comando restrito a administradores.")
+    if not identifier:
+        return None
+    data = admins if admins is not None else load_admins()
+    roles = data.get("roles", {})
+    if identifier in roles:
+        return roles[identifier]
+    if identifier in data.get("admins", []):
+        return ROLE_ADMIN
+    return None
+
+
+def require_role(actor: Optional[str], roles: Any) -> None:
+    """Exige que `actor` tenha um dos `roles`, ou levanta PermissionError.
+
+    `actor=None` (ou um identificador local de confiança) = chamador local,
+    sem checagem. Chamadores remotos devem ter o papel exigido.
+    """
+    if actor is None or actor in _LOCAL_TRUSTED:
+        return
+    actual = role_for(actor)
+    if actual not in roles:
+        raise PermissionError(
+            f"Permissão insuficiente: requer papel {sorted(roles)}, "
+            f"atual {actual or 'nenhum'}. Comando restrito a administradores."
+        )
+
+
+def require_admin(actor: Optional[str]) -> None:
+    """Exige papel `admin` (escritas no conhecimento)."""
+    require_role(actor, {ROLE_ADMIN})
+
+
+def require_approver(actor: Optional[str]) -> None:
+    """Exige papel `admin` ou `approver` (registrar aprovações/rejeições)."""
+    require_role(actor, {ROLE_ADMIN, ROLE_APPROVER})

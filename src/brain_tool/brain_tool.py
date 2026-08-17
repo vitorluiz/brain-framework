@@ -172,6 +172,11 @@ def consolidate(conn, expert, threshold=0.8, dry_run=False, actor=None):
         for p in pl[1:]:
             conn.delete(p)
             removed += 1
+    if removed:
+        checkpoints.audit_event(
+            conn, "consolidate", checkpoints.scope_for(expert),
+            actor or "cli:local", {"removed": removed},
+        )
     conn.commit()
     remaining = conn.scalar(
         select(func.count()).select_from(Page).where(Page.expert == expert)

@@ -206,7 +206,7 @@ próprio processo (fallback — spec §4.6).
 
 ---
 
-## Checkpoints assinados (governança — Fases 1–3)
+## Checkpoints assinados (governança — Fases 1–4)
 
 Toda escrita (`remember`, `forget`, `sync`) cria um **commit assinado** (Ed25519)
 e avança a ref `main` do scope (`global` ou `expert/<nome>`). A chave é gerada
@@ -217,9 +217,10 @@ automaticamente no primeiro uso em `$BRAIN_ROOT/.signing/` (ou injetada via
 brain verify [--scope global|expert/<nome>]   # valida cadeia + assinaturas + conteúdo
 brain log --scope expert/maria               # histórico de commits (mais novo primeiro)
 brain diff --scope expert/maria              # add/remove/change entre main e o parent
-brain approve --scope expert/maria --candidate <commit> [--policy P] [--note N]
-brain merge --scope expert/maria --candidate <job_id>   # publica um candidato
-brain rollback --scope expert/maria --to <commit> [--yes]   # move main, não apaga
+brain approve --scope expert/maria --candidate <commit> [--policy P] [--note N] [--actor A]
+brain merge --scope expert/maria --candidate <job_id> [--actor A]   # publica um candidato
+brain rollback --scope expert/maria --to <commit> [--yes] [--actor A]  # move main, não apaga
+brain promote --from expert/maria --to global [--objects H1,H2] [--message M] [--actor A]
 ```
 
 **Quarentena (Fase 3)**: `brain learn --path X` **sem** `--sync` cria um commit
@@ -236,8 +237,26 @@ não-destrutivo. Commits são referenciáveis por id completo ou prefixo único.
 Páginas migradas de antes dos checkpoints entram como commit *genesis* com
 `integrity: unverified` — sem garantia retroativa.
 
-> Design completo e fases: `plan/checkpoints-assinados.md`. Fase 4 pendente:
-> `promote` com dupla aprovação + RBAC.
+> Design completo e fases: `plan/checkpoints-assinados.md`. Fases 1–4
+> implementadas.
+
+**Promoção + dupla aprovação (Fase 4)**: `brain promote` propõe levar
+conhecimento de um expert para o global como um commit **candidato** marcado
+`requires_dual_approval` — ele **não publica**. Para publicar, são necessárias
+**2 aprovações de admins distintos** antes do `merge`:
+
+```bash
+brain approve --scope global --candidate <commit> --actor <admin-1>
+brain approve --scope global --candidate <commit> --actor <admin-2>
+brain merge   --scope global --candidate <candidate_id>
+```
+
+**RBAC (papéis)**: `admins.json` aceita `"roles": {"<id>": "admin"|"approver"}`.
+`admin` escreve no conhecimento (remember/learn/sync/merge/rollback/promote);
+`approver` só registra aprovações/rejeições. Gerencie com
+`brain admin role <id> <admin|approver>` (e `brain admin list` mostra os papéis).
+Identificadores locais de confiança (`cli:local`, `cli:root`) passam sem
+checagem; chamadores remotos (plugin/gateway/dashboard) são validados por papel.
 
 ---
 

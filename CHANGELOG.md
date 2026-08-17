@@ -39,6 +39,11 @@ e o versionamento segue [SemVer](https://semver.org/lang/pt-BR/).
   candidato sem publicar + `brain merge`), detecção heurística de conteúdo
   suspeito (instruções/credenciais/PII) e extração isolada (subprocesso com
   limites de CPU/memória/tempo) com pré-checks de tamanho e MIME.
+- **Checkpoints assinados — Fase 4**: `brain promote` (expert → global com
+  **dupla aprovação** — exige 2 admins distintos antes do merge), RBAC por
+  papéis (`admin`/`approver` via `brain admin role`), `--actor` em
+  approve/merge/rollback/promote e `audit_events` encadeado (hash-linked) em
+  todos os caminhos de mutação (promote/merge/approve/consolidate).
 
 ### Alterado
 
@@ -73,6 +78,9 @@ e o versionamento segue [SemVer](https://semver.org/lang/pt-BR/).
 - **Mitigação de prompt injection**: conteúdo importado nasce em quarentena
   (não-publicado), com scan de instruções/credenciais/PII e extração de
   PDF/DOCX/planilhas em subprocesso isolado (rlimits + timeout).
+- **Dupla aprovação** para promoção entre scopes (2 admins distintos) e **RBAC**
+  por papéis: `approver` só aprova/rejeita; `admin` escreve no conhecimento
+  (escritas exigem papel `admin`).
 
 ### Removido
 

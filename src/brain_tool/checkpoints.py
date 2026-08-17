@@ -14,12 +14,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy import delete, select
 
 from . import crypto
+from .auth import require_admin, require_approver
 from .models import (
     Approval,
     AuditEvent,
@@ -33,6 +35,7 @@ from .models import (
 PIPELINE_VERSION = "1"
 POLICY_IMPLICIT = "implicit-admin"
 POLICY_MIGRATION = "migration-genesis"
+POLICY_PROMOTION = "promotion"
 
 
 def scope_for(expert: str) -> str:
@@ -192,6 +195,11 @@ def _audit(conn, event: str, scope: str, actor: str, payload: dict) -> None:
                         payload=json.dumps(payload), hash=h))
 
 
+def audit_event(conn, event: str, scope: str, actor: str, payload: dict) -> None:
+    """Registra um evento de auditoria (hash-linked) — API pública p/ domínio."""
+    _audit(conn, event, scope, actor, payload)
+
+
 # --- API pública -------------------------------------------------------------
 
 def create_commit(
@@ -296,14 +304,32 @@ def merge_candidate(conn, scope: str, job_id: str, author: str) -> dict:
     """Avança `main` para o commit candidato (fast-forward) e materializa `pages`.
 
     A quarentena termina aqui: só faz fast-forward se a main não mudou desde a
-    proposta; caso contrário retorna conflito (resolução é P2).
+    proposta; caso contrário retorna conflito (resolução é P2). Candidatos de
+    promoção (`promote_into`) exigem **dupla aprovação** (2 admins distintos)
+    antes de publicar (§7.6).
     """
+    require_admin(author)
     ref = conn.get(Ref, f"{scope}/{candidate_ref(job_id)}")
     if ref is None:
         return {"ok": False, "error": "candidato não encontrado"}
     candidate = conn.get(Commit, ref.commit_id)
     if candidate is None:
         return {"ok": False, "error": "commit candidato ausente"}
+
+    try:
+        vr = json.loads(candidate.validation_results or "{}")
+    except (json.JSONDecodeError, TypeError):
+        vr = {}
+    if vr.get("requires_dual_approval"):
+        approvers = distinct_approvers(conn, scope, candidate.id)
+        if approvers < 2:
+            return {
+                "ok": False,
+                "error": (
+                    "promoção exige dupla aprovação (2 admins distintos); "
+                    f"apenas {approvers} aprovaram"
+                ),
+            }
 
     main_ref = conn.get(Ref, f"{scope}/main")
     main_tip = main_ref.commit_id if main_ref else None
@@ -443,10 +469,93 @@ def diff(conn, scope: str, from_commit: Optional[str] = None,
     return changes
 
 
+def approvals_for(conn, scope: str, candidate_commit_id: str) -> List[Approval]:
+    """Aprovações (`approve`) registradas para um commit candidato."""
+    return conn.scalars(
+        select(Approval).where(
+            Approval.scope == scope,
+            Approval.candidate_commit_id == candidate_commit_id,
+            Approval.decision == "approve",
+        )
+    ).all()
+
+
+def distinct_approvers(conn, scope: str, candidate_commit_id: str) -> int:
+    """Número de admins **distintos** que aprovaram um commit candidato."""
+    return len({a.approver for a in approvals_for(conn, scope, candidate_commit_id)})
+
+
+def _new_candidate_id() -> str:
+    return uuid.uuid4().hex[:16]
+
+
+def read_scope_entries(conn, scope: str,
+                       object_hashes: Optional[List[str]] = None) -> Tuple[List[dict], List[str]]:
+    """Lê `(object_hash, content, tipo, titulo)` da main de um scope.
+
+    Retorna `(entries, missing)`; `entries` são os objetos prontos para serem
+    promovidos para outro scope (os conteúdos vêm materializados, pois os scopes
+    podem viver em arquivos SQLite distintos).
+    """
+    tree = _read_tree(conn, scope)
+    if object_hashes:
+        selected = {h: tree[h] for h in object_hashes if h in tree}
+        missing = [h for h in object_hashes if h not in tree]
+    else:
+        selected = dict(tree)
+        missing = []
+    entries: List[dict] = []
+    for h, (tipo, titulo) in selected.items():
+        obj = conn.get(KnowledgeObject, h)
+        if obj is None:
+            missing.append(h)
+            continue
+        entries.append({"object_hash": h, "content": obj.content,
+                        "tipo": tipo, "titulo": titulo})
+    return entries, missing
+
+
+def promote_into(conn, to_scope: str, entries: List[dict], from_scope: str,
+                 author: str, message: Optional[str] = None,
+                 candidate_id: Optional[str] = None) -> dict:
+    """Propõe promoção de conhecimento para `to_scope` (expert → global).
+
+    Cria um commit **candidato** no scope destino marcado como
+    `requires_dual_approval` (dupla aprovação — §7.6). Não publica: o merge só
+    acontece após 2 admins distintos aprovarem (`approve` + `merge`).
+    """
+    require_admin(author)
+    if from_scope == to_scope:
+        return {"ok": False, "error": "origem e destino devem ser diferentes"}
+    changes = [
+        {"op": "add", "object_hash": e["object_hash"], "content": e["content"],
+         "tipo": e["tipo"], "titulo": e["titulo"]}
+        for e in entries
+    ]
+    if not changes:
+        return {"ok": False, "error": "nenhum objeto a promover"}
+    candidate_id = candidate_id or _new_candidate_id()
+    chash = create_commit(
+        conn, to_scope, changes, author=author, policy=POLICY_PROMOTION,
+        message=message or f"promoção de {from_scope}",
+        validation_results={
+            "promotion_from": from_scope,
+            "requires_dual_approval": True,
+        },
+        ref_name=candidate_ref(candidate_id),
+    )
+    _audit(conn, "promote", to_scope, author,
+           {"from": from_scope, "candidate": chash, "objects": len(changes)})
+    conn.commit()
+    return {"ok": True, "candidate": chash, "candidate_id": candidate_id,
+            "objects": len(changes)}
+
+
 def approve(conn, scope: str, candidate_commit_id: str, approver: str,
             policy: str = "manual", decision: str = "approve",
             justification: Optional[str] = None) -> int:
     """Registra uma aprovação/rejeição (governança). Retorna o id da approval."""
+    require_approver(approver)
     cid = resolve_commit_id(conn, scope, candidate_commit_id)
     if cid is None:
         raise ValueError(f"commit não encontrado no scope {scope}")
@@ -463,6 +572,7 @@ def approve(conn, scope: str, candidate_commit_id: str, approver: str,
 
 def rollback(conn, scope: str, to_commit_id: str, author: str) -> dict:
     """Move a ref main para um commit anterior e reconstrói `pages` (não-destrutivo)."""
+    require_admin(author)
     target_id = resolve_commit_id(conn, scope, to_commit_id)
     if target_id is None:
         return {"ok": False, "error": "commit não encontrado no scope"}
