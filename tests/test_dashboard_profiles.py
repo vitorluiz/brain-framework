@@ -6,6 +6,8 @@ fallback, proteção de auth e anti path-traversal.
 
 from __future__ import annotations
 
+import secrets
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -30,14 +32,20 @@ def profile_client(tmp_path, monkeypatch):
     monkeypatch.setattr(dashboard, "_hermes_config_get", lambda pdir, key: None)
     monkeypatch.setattr(dashboard, "_hermes_config_set", lambda pdir, key, val: [])
 
+    creds = {
+        "username": f"user-{secrets.token_hex(3)}",
+        "password": secrets.token_urlsafe(12),
+    }
     app = dashboard.create_app(secret="test-secret", token="test-token")
-    dashboard.add_dashboard_user("admin", "s3cret")
+    dashboard.add_dashboard_user(creds["username"], creds["password"])
     with TestClient(app) as c:
+        c.test_creds = creds
         yield c
 
 
 def _login(client) -> None:
-    r = client.post("/login", data={"username": "admin", "password": "s3cret"})
+    creds = client.test_creds
+    r = client.post("/login", data={"username": creds["username"], "password": creds["password"]})
     assert r.status_code == 200, r.text
 
 

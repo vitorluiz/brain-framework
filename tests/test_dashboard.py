@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import secrets
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -9,13 +11,19 @@ from brain_tool import dashboard
 @pytest.fixture()
 def client():
     app = dashboard.create_app(secret="test-secret", token="test-token")
-    dashboard.add_dashboard_user("admin", "s3cret")
+    creds = {
+        "username": f"user-{secrets.token_hex(3)}",
+        "password": secrets.token_urlsafe(12),
+    }
+    dashboard.add_dashboard_user(creds["username"], creds["password"])
     with TestClient(app) as c:
+        c.test_creds = creds
         yield c
 
 
 def _login(client) -> None:
-    r = client.post("/login", data={"username": "admin", "password": "s3cret"})
+    creds = client.test_creds
+    r = client.post("/login", data={"username": creds["username"], "password": creds["password"]})
     assert r.status_code == 200, r.text
     assert r.json()["ok"]
 
@@ -35,14 +43,16 @@ def test_index_is_public_login_page(client):
 
 
 def test_login_bad_password(client):
-    r = client.post("/login", data={"username": "admin", "password": "errada"})
+    creds = client.test_creds
+    r = client.post("/login", data={"username": creds["username"], "password": "wrong-pass"})
     assert r.status_code == 401
     assert r.json()["ok"] is False
 
 
 def test_login_and_me(client):
     _login(client)
-    assert client.get("/api/me").json()["user"] == "admin"
+    creds = client.test_creds
+    assert client.get("/api/me").json()["user"] == creds["username"]
 
 
 # --- gestão de usuários -----------------------------------------------------
@@ -57,9 +67,10 @@ def test_user_management_roundtrip(client):
 
 
 def test_password_not_stored_plaintext(client):
-    dashboard.add_dashboard_user("u", "senha-secreta-123")
+    plain = f"test-{secrets.token_hex(8)}"
+    dashboard.add_dashboard_user("u", plain)
     raw = dashboard._admins_file().read_text(encoding="utf-8")
-    assert "senha-secreta-123" not in raw
+    assert plain not in raw
     assert "pbkdf2_sha256" in raw
 
 
@@ -83,6 +94,7 @@ def test_learn_upload_then_jobs(client):
 
     jobs = client.get("/api/jobs", params={"expert": "maria"}).json()["jobs"]
     assert any(j["command"] == "learn" and j["status"] == "completed" for j in jobs)
+    assert any("asset://" in (j.get("metadata") or "") for j in jobs)
 
 
 def test_learn_path(client):
@@ -133,20 +145,22 @@ def test_check_endpoint(client):
 # --- hardening de segurança -------------------------------------------------
 
 def test_login_cross_origin_rejected(client):
+    creds = client.test_creds
     r = client.post(
         "/login",
         headers={"Origin": "http://evil.com"},
-        data={"username": "admin", "password": "s3cret"},
+        data={"username": creds["username"], "password": creds["password"]},
     )
     assert r.status_code == 403
 
 
 def test_login_lockout_after_failures(client):
+    creds = client.test_creds
     for _ in range(5):
-        r = client.post("/login", data={"username": "admin", "password": "errada"})
+        r = client.post("/login", data={"username": creds["username"], "password": "wrong-pass"})
         assert r.status_code == 401
     # 6ª tentativa, mesmo com a senha correta, é bloqueada pelo lockout
-    r = client.post("/login", data={"username": "admin", "password": "s3cret"})
+    r = client.post("/login", data={"username": creds["username"], "password": creds["password"]})
     assert r.status_code == 429
 
 

@@ -15,6 +15,7 @@ import socket
 import sys
 import urllib.parse
 import urllib.request
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -257,6 +258,78 @@ def _chunk_text(text: str, size: int = DEFAULT_CHUNK_SIZE) -> List[str]:
     return chunks or [text]
 
 
+# --- Assets de ingestão (asset://<id>) ---------------------------------------
+
+_ASSET_SCHEME = "asset://"
+
+
+def _assets_dir() -> Path:
+    d = get_brain_root() / ".uploads"
+    d.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return d
+
+
+def _assets_index_path() -> Path:
+    return _assets_dir() / "assets.json"
+
+
+def _load_assets_index() -> Dict[str, dict]:
+    p = _assets_index_path()
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_assets_index(data: Dict[str, dict]) -> None:
+    p = _assets_index_path()
+    p.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.chmod(p, 0o600)
+
+
+def register_upload_asset(filename: str, content: bytes) -> str:
+    """Persistência estável de upload e retorno de referência `asset://<id>`.
+
+    O dashboard registra o arquivo com um id opaco e passa só o `asset://id`
+    para o worker; o caminho físico fica encapsulado no índice local.
+    """
+    safe_name = Path(filename or "upload").name
+    asset_id = uuid.uuid4().hex
+    suffix = Path(safe_name).suffix.lower()
+    dest = _assets_dir() / f"{asset_id}{suffix}"
+    dest.write_bytes(content)
+    os.chmod(dest, 0o600)
+
+    idx = _load_assets_index()
+    idx[asset_id] = {
+        "path": str(dest),
+        "name": safe_name,
+        "size": len(content),
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    _save_assets_index(idx)
+    return f"{_ASSET_SCHEME}{asset_id}"
+
+
+def resolve_asset_ref(path_or_asset: str) -> str:
+    """Resolve `asset://<id>` para caminho físico do upload compartilhado."""
+    s = str(path_or_asset)
+    if not s.startswith(_ASSET_SCHEME):
+        return s
+    asset_id = s[len(_ASSET_SCHEME):].strip()
+    idx = _load_assets_index()
+    meta = idx.get(asset_id)
+    if not meta:
+        raise ValueError(f"asset nao encontrado: {asset_id}")
+    path = str(meta.get("path") or "")
+    if not path or not Path(path).is_file():
+        raise ValueError(f"asset indisponível no storage compartilhado: {asset_id}")
+    return path
+
+
 # --- Ingestão de URL (SSRF-safe) --------------------------------------------
 
 _URL_TIMEOUT = float(os.environ.get("BRAIN_DASHBOARD_URL_TIMEOUT", "15"))
@@ -357,6 +430,16 @@ def _set_job_status(conn, job_id, status, error=None):
     conn.commit()
 
 
+def _staging_exists(conn, expert: str, h: str, pipeline_version: str = "1") -> bool:
+    return conn.scalars(
+        select(KnowledgeStaging.id).where(
+            KnowledgeStaging.expert == expert,
+            KnowledgeStaging.hash_canonical == h,
+            KnowledgeStaging.pipeline_version == pipeline_version,
+        )
+    ).first() is not None
+
+
 def _learn_file_into_staging(conn, expert, file_path, sync_immediately=False, dry_run=False):
     path = Path(file_path)
     if path.is_dir():
@@ -379,9 +462,14 @@ def _learn_file_into_staging(conn, expert, file_path, sync_immediately=False, dr
         }
     staging_ids = []
     changes = []
+    skipped_existing = 0
     for chunk in chunks:
         h = generate_canonical_hash(chunk)
-        s = KnowledgeStaging(expert=expert, chunk_data=chunk, hash_canonical=h)
+        if _staging_exists(conn, expert, h, "1"):
+            skipped_existing += 1
+            continue
+        s = KnowledgeStaging(expert=expert, chunk_data=chunk, hash_canonical=h,
+                             pipeline_version="1")
         conn.add(s)
         conn.flush()
         staging_ids.append(s.id)
@@ -400,6 +488,7 @@ def _learn_file_into_staging(conn, expert, file_path, sync_immediately=False, dr
         "scan": scan,
         "changes": changes,
         "status": "pending",
+        "skipped_existing": skipped_existing,
     }
     if sync_immediately:
         result["sync"] = sync(conn, expert)
@@ -425,9 +514,14 @@ def _learn_url_into_staging(conn, expert, url, sync_immediately=False, dry_run=F
         }
     staging_ids = []
     changes = []
+    skipped_existing = 0
     for chunk in chunks:
         h = generate_canonical_hash(chunk)
-        s = KnowledgeStaging(expert=expert, chunk_data=chunk, hash_canonical=h)
+        if _staging_exists(conn, expert, h, "1"):
+            skipped_existing += 1
+            continue
+        s = KnowledgeStaging(expert=expert, chunk_data=chunk, hash_canonical=h,
+                             pipeline_version="1")
         conn.add(s)
         conn.flush()
         staging_ids.append(s.id)
@@ -446,6 +540,7 @@ def _learn_url_into_staging(conn, expert, url, sync_immediately=False, dry_run=F
         "scan": scan,
         "changes": changes,
         "status": "pending",
+        "skipped_existing": skipped_existing,
     }
     if sync_immediately:
         result["sync"] = sync(conn, expert)
@@ -473,9 +568,10 @@ def _ingest(conn, expert, path, sync_immediately=False):
     s = str(path)
     if s.startswith(("http://", "https://")):
         return _learn_url_into_staging(conn, expert, s, sync_immediately)
-    p = Path(path)
+    s = resolve_asset_ref(s)
+    p = Path(s)
     if p.is_dir():
-        results = learn_directory(conn, expert, path, sync_immediately)
+        results = learn_directory(conn, expert, s, sync_immediately)
         all_changes = []
         scans = []
         for r in results:
@@ -486,7 +582,7 @@ def _ingest(conn, expert, path, sync_immediately=False):
                 "type": "directory", "files_processed": len(results), "results": results,
                 "changes": all_changes, "scan": merge_scans(scans)}
     elif p.is_file():
-        return _learn_file_into_staging(conn, expert, path, sync_immediately)
+        return _learn_file_into_staging(conn, expert, s, sync_immediately)
     else:
         raise ValueError(f"Path nao e arquivo nem diretorio: {path}")
 

@@ -46,6 +46,8 @@ e o versionamento segue [SemVer](https://semver.org/lang/pt-BR/).
   todos os caminhos de mutação (promote/merge/approve/consolidate).
 - **Teste de integração real** (Celery + Redis via Docker) — `BRAIN_INTEGRATION=1`,
   fluxo async ponta a ponta (prova com broker de verdade, não mock).
+- **Governança no plugin Hermes**: tool `brain` agora expõe `verify/log/diff`
+  (leitura) e `approve/merge/promote/rollback` (mutação admin-only).
 
 ### Alterado
 

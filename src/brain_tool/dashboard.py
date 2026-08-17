@@ -31,7 +31,6 @@ import subprocess
 import sys
 import threading
 import time
-import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
@@ -40,7 +39,7 @@ from urllib.parse import urlparse
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from .brain_tool import check, count_pages, learn, list_jobs
+from .brain_tool import check, count_pages, learn, list_jobs, register_upload_asset
 from .db import get_brain_root, get_session, list_expert_names, validate_expert_identifier
 from .brain import (
     resolve_hermes_profile_dir,
@@ -540,16 +539,14 @@ def create_app(secret: Optional[str] = None, token: Optional[str] = None) -> Fas
                     raise HTTPException(status_code=400, detail=str(e))
             for f in uploads:
                 safe_name = Path(f.filename or "upload").name
-                dest = _uploads_dir() / f"{uuid.uuid4().hex}_{safe_name}"
                 content = await f.read(MAX_UPLOAD_BYTES + 1)
                 if len(content) > MAX_UPLOAD_BYTES:
                     raise HTTPException(
                         status_code=413,
                         detail=f"arquivo excede o limite de {MAX_UPLOAD_BYTES // (1024 * 1024)}MB",
                     )
-                dest.write_bytes(content)
-                os.chmod(dest, 0o600)
-                results.append(learn(conn, target, str(dest), sync_immediately=sync_flag))
+                asset_ref = register_upload_asset(safe_name, content)
+                results.append(learn(conn, target, asset_ref, sync_immediately=sync_flag))
             _audit("learn", user=user, target=target, sync=sync_flag,
                    path=path or None, url=url or None, files=[f.filename for f in uploads])
             return {"ok": True, "target": target, "results": results}
