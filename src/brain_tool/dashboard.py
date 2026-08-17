@@ -437,8 +437,9 @@ def create_app(secret: Optional[str] = None, token: Optional[str] = None) -> Fas
                                 max_age=_SESSION_TTL)
                 return resp
             return RedirectResponse("/", status_code=302)
-        # render index with build version in footer
-        return HTMLResponse(_INDEX_HTML.format(version=__version__))
+        # render index with build version in footer (use replace to avoid
+        # interpreting braces from the embedded HTML/JS)
+        return HTMLResponse(_INDEX_HTML.replace("__VERSION__", __version__))
 
     @app.post("/login")
     async def login(
@@ -1226,7 +1227,7 @@ setInterval(() => { if (!$("app-view").classList.contains("hidden")) loadJobs().
 setInterval(() => { if (!$("app-view").classList.contains("hidden")) loadStatus().catch(() => {}); }, 30000);
 </script>
 <footer style="padding:12px 20px;border-top:1px solid #22262f;text-align:center" class="muted">
-  brain-framework {version}
+  brain-framework __VERSION__
 </footer>
 </body>
 </html>
