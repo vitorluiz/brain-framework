@@ -122,6 +122,9 @@ brain update          # git pull origin main no diretório do framework
 brain sync all        # sync (staging → pages) de global + todos os experts
 brain verify          # integridade dos checkpoints assinados (todos os scopes)
 brain log --scope S   # histórico de commits (global ou expert/<nome>)
+brain diff --scope S  # diferença de árvore entre commits (add/remove/change)
+brain approve --scope S --candidate C [--policy P] [--note N]
+brain rollback --scope S --to C [--yes]   # move main para commit anterior
 ```
 
 O `restore` localiza o backup pelo timestamp (ou caminho do diretório), copia os
@@ -201,7 +204,7 @@ próprio processo (fallback — spec §4.6).
 
 ---
 
-## Checkpoints assinados (governança — Fase 1)
+## Checkpoints assinados (governança — Fases 1–2)
 
 Toda escrita (`remember`, `forget`, `sync`) cria um **commit assinado** (Ed25519)
 e avança a ref `main` do scope (`global` ou `expert/<nome>`). A chave é gerada
@@ -211,15 +214,20 @@ automaticamente no primeiro uso em `$BRAIN_ROOT/.signing/` (ou injetada via
 ```bash
 brain verify [--scope global|expert/<nome>]   # valida cadeia + assinaturas + conteúdo
 brain log --scope expert/maria               # histórico de commits (mais novo primeiro)
+brain diff --scope expert/maria              # add/remove/change entre main e o parent
+brain approve --scope expert/maria --candidate <commit> [--policy P] [--note N]
+brain rollback --scope expert/maria --to <commit> [--yes]   # move main, não apaga
 ```
 
 `verify` detecta adulteração (conteúdo, campos do commit, assinatura); `check`
-também recalcula o `hash_canonical` das páginas legadas (ponte). Páginas
-migradas de antes dos checkpoints entram como commit *genesis* com
-`integrity: unverified` — não há garantia retroativa sobre dados antigos.
+também recalcula o `hash_canonical` das páginas legadas (ponte). `rollback` é
+não-destrutivo (commits/objetos ficam; só o ponteiro `main` muda e as `pages`
+são reconstruídas). Commits são referenciáveis por id completo ou prefixo único.
+Páginas migradas de antes dos checkpoints entram como commit *genesis* com
+`integrity: unverified` — sem garantia retroativa.
 
-> Design completo e fases: `plan/checkpoints-assinados.md`. Aprovação explícita
-> (`approve`/`diff`/`rollback`) é a Fase 2.
+> Design completo e fases: `plan/checkpoints-assinados.md`. Fases 3–4 pendentes:
+> quarentena/prompt injection e `promote` com dupla aprovação + RBAC.
 
 ---
 

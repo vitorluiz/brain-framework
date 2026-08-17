@@ -1,8 +1,8 @@
 # Checkpoints Assinados — Design de Governança de Conhecimento
 
-> Estado: **aprovada (17/08/2026) + Fase 1 implementada** — decisões na §13.
-> Fase 1 (§12) entregue: storage content-addressed, commits, refs, Ed25519,
-> `verify`/`log` e migração genesis. Fases 2–4 pendentes.
+> Estado: **aprovada (17/08/2026) + Fases 1–2 implementadas** — decisões na §13.
+> Fase 1: storage content-addressed, commits, refs, Ed25519, `verify`/`log`,
+> migração genesis. Fase 2: `diff`/`approve`/`rollback`. Fases 3–4 pendentes.
 > Origem: auditoria técnica de 17/08/2026 — "Falha central do hash atual" e
 > "Feature recomendada: checkpoints assinados".
 > Objetivo deste documento: definir o modelo de dados, o fluxo e os comandos
@@ -339,7 +339,7 @@ Modelo atual: `pages` (+ `knowledge_staging`, `jobs`).
 |---|---|---|
 | **0** | Este design + decisões da §13 | spec aprovado ✅ |
 | **1** | `knowledge_objects` + `commits` + `refs` + Ed25519 + `verify` + migração (genesis) | integridade real ✅ |
-| **2** | `approve`/`diff`/`log`/`rollback`; remover `learn --sync` (sem publicação direta) | governança |
+| **2** | `approve`/`diff`/`rollback` (`log` saiu na Fase 1) | governança ✅ (`learn --sync` mantido — decisão §13.4) |
 | **3** | Quarentena + extração isolada + detecção de conteúdo suspeito | anti-injection |
 | **4** | `promote` + dupla aprovação + RBAC + `audit_events` em todos os caminhos | org mode |
 

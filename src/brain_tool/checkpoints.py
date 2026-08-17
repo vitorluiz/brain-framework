@@ -17,10 +17,11 @@ import json
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from . import crypto
 from .models import (
+    Approval,
     AuditEvent,
     Commit,
     CommitItem,
@@ -36,6 +37,10 @@ POLICY_MIGRATION = "migration-genesis"
 
 def scope_for(expert: str) -> str:
     return "global" if expert == "global" else f"expert/{expert}"
+
+
+def expert_for(scope: str) -> str:
+    return "global" if scope == "global" else scope.removeprefix("expert/")
 
 
 def object_hash(content: str) -> str:
@@ -117,13 +122,10 @@ def _ordered_commits(conn, tip_commit_id: str) -> List[Commit]:
     return ordered
 
 
-def _read_tree(conn, scope: str) -> Dict[str, Tuple[str, Optional[str]]]:
-    """Reconstrói a árvore (object_hash -> (tipo, titulo)) a partir da main."""
-    ref = conn.get(Ref, f"{scope}/main")
+def _tree_at_commit(conn, tip_commit_id: str) -> Dict[str, Tuple[str, Optional[str]]]:
+    """Reconstrói a árvore (object_hash -> (tipo, titulo)) a partir de um commit."""
     tree: Dict[str, Tuple[str, Optional[str]]] = {}
-    if ref is None:
-        return tree
-    for c in _ordered_commits(conn, ref.commit_id):
+    for c in _ordered_commits(conn, tip_commit_id):
         for it in conn.scalars(
             select(CommitItem).where(CommitItem.commit_id == c.id)
         ).all():
@@ -134,9 +136,30 @@ def _read_tree(conn, scope: str) -> Dict[str, Tuple[str, Optional[str]]]:
     return tree
 
 
+def _read_tree(conn, scope: str) -> Dict[str, Tuple[str, Optional[str]]]:
+    """Reconstrói a árvore (object_hash -> (tipo, titulo)) a partir da main."""
+    ref = conn.get(Ref, f"{scope}/main")
+    if ref is None:
+        return {}
+    return _tree_at_commit(conn, ref.commit_id)
+
+
 def _current_parents(conn, scope: str) -> List[str]:
     ref = conn.get(Ref, f"{scope}/main")
     return [ref.commit_id] if ref else []
+
+
+def resolve_commit_id(conn, scope: str, spec: Optional[str]) -> Optional[str]:
+    """Resolve um commit por id completo ou prefixo único dentro do scope."""
+    if not spec:
+        return None
+    c = conn.get(Commit, spec)
+    if c is not None and c.scope == scope:
+        return c.id
+    matches = conn.scalars(
+        select(Commit.id).where(Commit.scope == scope, Commit.id.like(f"{spec}%"))
+    ).all()
+    return matches[0] if len(matches) == 1 else None
 
 
 def _set_ref(conn, name: str, commit_id: str) -> None:
@@ -329,3 +352,86 @@ def history(conn, scope: str) -> List[dict]:
         }
         for c in ordered
     ]
+
+
+def diff(conn, scope: str, from_commit: Optional[str] = None,
+         to_commit: Optional[str] = None) -> List[dict]:
+    """Diferença de árvore entre dois commits (default: main vs seu parent)."""
+    ref = conn.get(Ref, f"{scope}/main")
+    if to_commit is None:
+        to_commit = ref.commit_id if ref else None
+    else:
+        to_commit = resolve_commit_id(conn, scope, to_commit)
+    if to_commit is None:
+        return []
+    to_tree = _tree_at_commit(conn, to_commit)
+
+    if from_commit is None:
+        c = conn.get(Commit, to_commit)
+        parents = json.loads(c.parent_hashes) if c else []
+        from_tree = _tree_at_commit(conn, parents[0]) if parents else {}
+    else:
+        resolved = resolve_commit_id(conn, scope, from_commit)
+        from_tree = _tree_at_commit(conn, resolved) if resolved else {}
+
+    changes: List[dict] = []
+    for h in sorted(set(from_tree) | set(to_tree)):
+        if h not in from_tree:
+            changes.append({"op": "add", "object_hash": h,
+                            "tipo": to_tree[h][0], "titulo": to_tree[h][1]})
+        elif h not in to_tree:
+            changes.append({"op": "remove", "object_hash": h,
+                            "tipo": from_tree[h][0], "titulo": from_tree[h][1]})
+        elif from_tree[h] != to_tree[h]:
+            changes.append({"op": "change", "object_hash": h,
+                            "tipo": to_tree[h][0], "titulo": to_tree[h][1]})
+    return changes
+
+
+def approve(conn, scope: str, candidate_commit_id: str, approver: str,
+            policy: str = "manual", decision: str = "approve",
+            justification: Optional[str] = None) -> int:
+    """Registra uma aprovação/rejeição (governança). Retorna o id da approval."""
+    cid = resolve_commit_id(conn, scope, candidate_commit_id)
+    if cid is None:
+        raise ValueError(f"commit não encontrado no scope {scope}")
+    a = Approval(scope=scope, candidate_commit_id=cid,
+                 approver=approver, decision=decision, policy=policy,
+                 justification=justification)
+    conn.add(a)
+    conn.flush()
+    _audit(conn, decision, scope, approver,
+           {"candidate": candidate_commit_id, "policy": policy})
+    conn.commit()
+    return a.id
+
+
+def rollback(conn, scope: str, to_commit_id: str, author: str) -> dict:
+    """Move a ref main para um commit anterior e reconstrói `pages` (não-destrutivo)."""
+    target_id = resolve_commit_id(conn, scope, to_commit_id)
+    if target_id is None:
+        return {"ok": False, "error": "commit não encontrado no scope"}
+    ref = conn.get(Ref, f"{scope}/main")
+    if ref is None:
+        return {"ok": False, "error": "sem main ref"}
+    target = conn.get(Commit, target_id)
+    if target is None or target.scope != scope:
+        return {"ok": False, "error": "commit não encontrado no scope"}
+    current_ids = {c.id for c in _ordered_commits(conn, ref.commit_id)}
+    if target_id not in current_ids:
+        return {"ok": False, "error": "commit não é ancestro do main atual"}
+
+    tree = _tree_at_commit(conn, target_id)
+    expert = expert_for(scope)
+    conn.execute(delete(Page).where(Page.expert == expert))
+    for h, (tipo, titulo) in tree.items():
+        obj = conn.get(KnowledgeObject, h)
+        if obj is None:
+            continue
+        conn.add(Page(expert=expert, tipo=tipo, titulo=titulo,
+                      corpo=obj.content, hash_canonical=h))
+    _set_ref(conn, f"{scope}/main", target_id)
+    _audit(conn, "rollback", scope, author,
+           {"to": target_id, "from": ref.commit_id})
+    conn.commit()
+    return {"ok": True, "to": target_id, "pages": len(tree)}
