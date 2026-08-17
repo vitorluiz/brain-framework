@@ -304,11 +304,15 @@ def _audit(event: str, **fields) -> None:
 
 
 # --- Status dos serviços (Redis / Celery / Docker) --------------------------
+#
+# A leitura de REDIS_URL / CELERY_BROKER_URL é feita via ambiente.
+# Se não estiverem definidos, assume que não há broker configurado (em vez de
+# assumir localhost:6379, que falharia se o Redis estiver só no Docker).
 
 def _redis_status() -> dict:
-    url = (os.environ.get("REDIS_URL")
-           or os.environ.get("CELERY_BROKER_URL")
-           or "redis://localhost:6379/0")
+    url = os.environ.get("REDIS_URL") or os.environ.get("CELERY_BROKER_URL")
+    if not url:
+        return {"ok": False, "url": None, "detail": "REDIS_URL/CELERY_BROKER_URL não definidos"}
     try:
         import redis
 
@@ -320,9 +324,9 @@ def _redis_status() -> dict:
 
 
 def _celery_status() -> dict:
-    broker = (os.environ.get("CELERY_BROKER_URL")
-              or os.environ.get("REDIS_URL")
-              or "redis://localhost:6379/0")
+    broker = os.environ.get("CELERY_BROKER_URL") or os.environ.get("REDIS_URL")
+    if not broker:
+        return {"ok": False, "broker": None, "detail": "CELERY_BROKER_URL/REDIS_URL não definidos"}
     try:
         from brain_tool.worker import app as celery_app
 
