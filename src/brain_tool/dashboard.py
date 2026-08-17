@@ -693,6 +693,124 @@ def create_app(secret: Optional[str] = None, token: Optional[str] = None) -> Fas
         models = _ollama_list_models(base_url)
         return {"models": models, "base_url": base_url}
 
+    @app.get("/settings", response_class=HTMLResponse)
+    async def settings_page(request: Request, user: str = Depends(current_user)):
+        """Página de configurações (Ollama, etc.)."""
+        return templates.TemplateResponse(request, "dashboard/settings.html", {
+            "version": __version__,
+        })
+
+    @app.get("/api/settings/ollama")
+    async def api_get_ollama_settings(user: str = Depends(current_user)):
+        """Retorna configuração atual do Ollama."""
+        import os
+        from pathlib import Path
+        env_path = Path(".env")
+        base_url = os.environ.get("BRAIN_OLLAMA_BASE_URL", "http://localhost:11434")
+        default_model = os.environ.get("BRAIN_OLLAMA_DEFAULT_MODEL", "hermes3:3b")
+        enabled = bool(os.environ.get("BRAIN_OLLAMA_BASE_URL"))
+        
+        # Verifica status
+        from brain_tool.brain import _ollama_check_installed, _ollama_check_running, _ollama_list_models
+        installed = _ollama_check_installed()
+        running = _ollama_check_running(base_url) if installed else False
+        models = _ollama_list_models(base_url) if running else []
+        
+        return {
+            "enabled": enabled,
+            "base_url": base_url,
+            "default_model": default_model,
+            "installed": installed,
+            "running": running,
+            "models": models,
+        }
+
+    @app.post("/api/settings/ollama")
+    async def api_set_ollama_settings(
+        enabled: bool = Form(False),
+        base_url: str = Form("http://localhost:11434"),
+        default_model: str = Form("hermes3:3b"),
+        install_if_missing: bool = Form(False),
+        pull_model: str = Form(""),
+        user: str = Depends(current_user),
+    ):
+        """Configura Ollama: habilita/desabilita, instala, puxa modelo."""
+        import os
+        from pathlib import Path
+        import subprocess
+        
+        env_path = Path(".env")
+        if not env_path.exists():
+            raise HTTPException(status_code=400, detail="Arquivo .env não encontrado")
+        
+        content = env_path.read_text()
+        lines = content.splitlines()
+        
+        if enabled:
+            # Habilita Ollama
+            vars_to_set = {
+                "BRAIN_OLLAMA_BASE_URL": base_url,
+                "BRAIN_OLLAMA_DEFAULT_MODEL": default_model,
+            }
+            
+            updated = set()
+            new_lines = []
+            for line in lines:
+                key = line.split("=")[0].strip() if "=" in line else line.strip()
+                if key in vars_to_set:
+                    new_lines.append(f"{key}={vars_to_set[key]}")
+                    updated.add(key)
+                else:
+                    new_lines.append(line)
+            
+            for key in vars_to_set:
+                if key not in updated:
+                    new_lines.append(f"{key}={vars_to_set[key]}")
+            
+            env_path.write_text("\n".join(new_lines) + "\n")
+            os.environ["BRAIN_OLLAMA_BASE_URL"] = base_url
+            os.environ["BRAIN_OLLAMA_DEFAULT_MODEL"] = default_model
+            
+            # Instala se solicitado e não instalado
+            if install_if_missing:
+                import shutil
+                if not shutil.which("ollama"):
+                    result = subprocess.run(
+                        "curl -fsSL https://ollama.com/install.sh | sh",
+                        shell=True, capture_output=True, text=True, timeout=120
+                    )
+                    if result.returncode != 0:
+                        return {"ok": False, "error": f"Falha ao instalar Ollama: {result.stderr}"}
+        
+        else:
+            # Desabilita Ollama
+            new_lines = []
+            for line in lines:
+                key = line.split("=")[0].strip() if "=" in line else line.strip()
+                if key in ("BRAIN_OLLAMA_BASE_URL", "BRAIN_OLLAMA_DEFAULT_MODEL"):
+                    new_lines.append(f"# {line}")
+                else:
+                    new_lines.append(line)
+            
+            env_path.write_text("\n".join(new_lines) + "\n")
+            os.environ.pop("BRAIN_OLLAMA_BASE_URL", None)
+            os.environ.pop("BRAIN_OLLAMA_DEFAULT_MODEL", None)
+        
+        # Puxa modelo se solicitado
+        if pull_model:
+            import shutil
+            if shutil.which("ollama"):
+                result = subprocess.run(
+                    ["ollama", "pull", pull_model],
+                    capture_output=True, text=True, timeout=300
+                )
+                if result.returncode != 0:
+                    return {"ok": False, "error": f"Falha ao baixar modelo: {result.stderr}"}
+            else:
+                return {"ok": False, "error": "Ollama não instalado para baixar modelo"}
+        
+        return {"ok": True, "message": "Configuração salva. Reinicie o dashboard/worker para aplicar."}
+
     return app
 
 

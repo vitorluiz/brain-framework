@@ -1379,19 +1379,29 @@ def cmd_update(args) -> int:
                 print(f"  (atualizado de {current_version} para {new_version})")
             # Verificação rápida de saúde (import + testes de unidade)
             print("\n=== Verificando build ===")
-            verify_result = subprocess.run(
-                [sys.executable, "-m", "pytest", "tests/test_dashboard.py", "-q", "--tb=no"],
-                cwd=PROJECT_ROOT,
+            # Verifica se pytest está disponível no ambiente atual
+            pytest_check = subprocess.run(
+                [sys.executable, "-c", "import pytest"],
                 capture_output=True,
                 text=True,
-                timeout=120
+                timeout=10
             )
-            if verify_result.returncode == 0:
-                print("= Build OK (testes dashboard passaram)")
+            if pytest_check.returncode != 0:
+                print("= AVISO: pytest não disponível no ambiente — pulando verificação de testes")
             else:
-                print("= ATENÇÃO: testes falharam")
-                print(verify_result.stdout)
-                print(verify_result.stderr)
+                verify_result = subprocess.run(
+                    [sys.executable, "-m", "pytest", "tests/test_dashboard.py", "-q", "--tb=no"],
+                    cwd=PROJECT_ROOT,
+                    capture_output=True,
+                    text=True,
+                    timeout=120
+                )
+                if verify_result.returncode == 0:
+                    print("= Build OK (testes dashboard passaram)")
+                else:
+                    print("= ATENÇÃO: testes falharam")
+                    print(verify_result.stdout)
+                    print(verify_result.stderr)
             return 0
         else:
             # Se falhou (ex: conflitos), tenta merge simples como fallback
@@ -1548,9 +1558,190 @@ def cmd_admin_role(args) -> int:
     return 0
 
 
-# === Comandos do brain_tool (integrados no Brain) ===
+# === Admin: Ollama ===
 
-def cmd_init(args) -> int:
+def _ollama_check_installed() -> bool:
+    """Verifica se o binário ollama está no PATH."""
+    import shutil
+    return shutil.which("ollama") is not None
+
+
+def _ollama_check_running(base_url: str = "http://localhost:11434") -> bool:
+    """Verifica se o servidor Ollama está rodando."""
+    import urllib.request
+    try:
+        req = urllib.request.Request(base_url.rstrip("/") + "/api/tags", headers={"User-Agent": "brain-framework"})
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+def _ollama_list_models(base_url: str = "http://localhost:11434") -> list:
+    """Lista modelos disponíveis no Ollama."""
+    import urllib.request
+    import json
+    try:
+        req = urllib.request.Request(base_url.rstrip("/") + "/api/tags", headers={"User-Agent": "brain-framework"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.load(resp)
+            return [m["name"] for m in data.get("models", [])]
+    except Exception:
+        return []
+
+
+def cmd_admin_ollama_status(args) -> int:
+    """Mostra status do Ollama (instalado, rodando, modelos)."""
+    print("\n=== Ollama Status ===")
+    
+    installed = _ollama_check_installed()
+    print(f"Instalado: {'SIM' if installed else 'NÃO'}")
+    
+    if not installed:
+        print("\nOllama não está instalado. Use: brain admin ollama install")
+        return 0
+    
+    running = _ollama_check_running()
+    print(f"Servidor rodando: {'SIM' if running else 'NÃO'}")
+    
+    if running:
+        models = _ollama_list_models()
+        print(f"Modelos disponíveis ({len(models)}):")
+        for m in models:
+            print(f"  - {m}")
+        if not models:
+            print("  (nenhum modelo baixado)")
+    else:
+        print("\nOllama instalado mas servidor não está rodando.")
+        print("Inicie com: ollama serve")
+    
+    return 0
+
+
+def cmd_admin_ollama_install(args) -> int:
+    """Instala Ollama (se não estiver)."""
+    if _ollama_check_installed() and not args.force:
+        print("Ollama já está instalado. Use --force para reinstalar.")
+        return 0
+    
+    print("Instalando Ollama...")
+    import subprocess
+    try:
+        result = subprocess.run(
+            "curl -fsSL https://ollama.com/install.sh | sh",
+            shell=True, capture_output=True, text=True, timeout=120
+        )
+        if result.returncode == 0:
+            print("✓ Ollama instalado com sucesso!")
+            print("Inicie o servidor com: ollama serve")
+            return 0
+        else:
+            print(f"Erro na instalação: {result.stderr}", file=sys.stderr)
+            return 1
+    except subprocess.TimeoutExpired:
+        print("Timeout na instalação", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"Erro: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_admin_ollama_pull(args) -> int:
+    """Baixa modelo no Ollama."""
+    if not _ollama_check_installed():
+        print("Ollama não está instalado. Use: brain admin ollama install", file=sys.stderr)
+        return 1
+    
+    if not _ollama_check_running():
+        print("Servidor Ollama não está rodando. Inicie com: ollama serve", file=sys.stderr)
+        return 1
+    
+    model = args.model
+    print(f"Baixando modelo: {model}...")
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["ollama", "pull", model],
+            capture_output=True, text=True, timeout=300
+        )
+        if result.returncode == 0:
+            print(f"✓ Modelo '{model}' baixado com sucesso!")
+            return 0
+        else:
+            print(f"Erro: {result.stderr}", file=sys.stderr)
+            return 1
+    except subprocess.TimeoutExpired:
+        print("Timeout no download do modelo", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"Erro: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_admin_ollama_enable(args) -> int:
+    """Habilita uso de Ollama no framework (salva config no .env)."""
+    import os
+    from pathlib import Path
+    
+    env_path = Path(".env")
+    if not env_path.exists():
+        print("Arquivo .env não encontrado. Crie a partir do .env.example", file=sys.stderr)
+        return 1
+    
+    content = env_path.read_text()
+    lines = content.splitlines()
+    
+    # Atualiza ou adiciona as variáveis
+    vars_to_set = {
+        "BRAIN_OLLAMA_BASE_URL": args.base_url,
+        "BRAIN_OLLAMA_DEFAULT_MODEL": args.default_model,
+    }
+    
+    updated = set()
+    new_lines = []
+    for line in lines:
+        key = line.split("=")[0].strip() if "=" in line else line.strip()
+        if key in vars_to_set:
+            new_lines.append(f"{key}={vars_to_set[key]}")
+            updated.add(key)
+        else:
+            new_lines.append(line)
+    
+    for key in vars_to_set:
+        if key not in updated:
+            new_lines.append(f"{key}={vars_to_set[key]}")
+    
+    env_path.write_text("\n".join(new_lines) + "\n")
+    print(f"✓ Ollama habilitado: base_url={args.base_url}, default_model={args.default_model}")
+    print("  (requer restart do dashboard/worker para aplicar)")
+    return 0
+
+
+def cmd_admin_ollama_disable(args) -> int:
+    """Desabilita uso de Ollama no framework (comenta variáveis no .env)."""
+    import os
+    from pathlib import Path
+    
+    env_path = Path(".env")
+    if not env_path.exists():
+        print("Arquivo .env não encontrado.", file=sys.stderr)
+        return 1
+    
+    content = env_path.read_text()
+    lines = content.splitlines()
+    
+    new_lines = []
+    for line in lines:
+        key = line.split("=")[0].strip() if "=" in line else line.strip()
+        if key in ("BRAIN_OLLAMA_BASE_URL", "BRAIN_OLLAMA_DEFAULT_MODEL"):
+            new_lines.append(f"# {line}")
+        else:
+            new_lines.append(line)
+    
+    env_path.write_text("\n".join(new_lines) + "\n")
+    print("✓ Ollama desabilitado (variáveis comentadas no .env)")
+    print("  (requer restart do dashboard/worker para aplicar)")
+    return 0
     """Inicializa um novo brain.db."""
     db_path = get_brain_db_path(expert=args.name, global_brain=args.global_brain,
                                brain_path=args.brain_path)
@@ -1974,6 +2165,29 @@ Para conhecer mais:
     p_admin_role.add_argument('role', choices=[ROLE_ADMIN, ROLE_APPROVER],
                               help='Papel: admin (escritas) ou approver (só aprovar)')
     p_admin_role.set_defaults(func=lambda args: cmd_admin_role(args))
+
+    # --- Admin: Ollama ---
+    p_admin_ollama = p_admin_sub.add_parser('ollama', help='Gerencia Ollama (instalação, modelos, status)')
+    p_admin_ollama_sub = p_admin_ollama.add_subparsers(dest='ollama_action')
+    
+    p_admin_ollama_status = p_admin_ollama_sub.add_parser('status', help='Mostra status do Ollama (instalado, rodando, modelos)')
+    p_admin_ollama_status.set_defaults(func=lambda args: cmd_admin_ollama_status(args))
+    
+    p_admin_ollama_install = p_admin_ollama_sub.add_parser('install', help='Instala Ollama (se não estiver)')
+    p_admin_ollama_install.add_argument('--force', action='store_true', help='Reinstala mesmo se já existir')
+    p_admin_ollama_install.set_defaults(func=lambda args: cmd_admin_ollama_install(args))
+    
+    p_admin_ollama_pull = p_admin_ollama_sub.add_parser('pull', help='Baixa modelo no Ollama')
+    p_admin_ollama_pull.add_argument('model', help='Nome do modelo (ex: hermes3:3b)')
+    p_admin_ollama_pull.set_defaults(func=lambda args: cmd_admin_ollama_pull(args))
+    
+    p_admin_ollama_enable = p_admin_ollama_sub.add_parser('enable', help='Habilita uso de Ollama no framework')
+    p_admin_ollama_enable.add_argument('--base-url', default='http://localhost:11434', help='URL base do Ollama')
+    p_admin_ollama_enable.add_argument('--default-model', default='hermes3:3b', help='Modelo padrão')
+    p_admin_ollama_enable.set_defaults(func=lambda args: cmd_admin_ollama_enable(args))
+    
+    p_admin_ollama_disable = p_admin_ollama_sub.add_parser('disable', help='Desabilita uso de Ollama no framework')
+    p_admin_ollama_disable.set_defaults(func=lambda args: cmd_admin_ollama_disable(args))
 
     # --- SOUL.md / brain (LLM) ---
     p_soul = sp.add_parser('soul', help='Gerencia o SOUL.md (persona) de um profile')

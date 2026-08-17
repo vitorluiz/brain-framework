@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Configurações — Brain Dashboard</title>
+<style>
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+       background: #0f1115; color: #e6e8eb; }
+header { display: flex; align-items: center; gap: 12px; padding: 12px 20px;
+         border-bottom: 1px solid #22262f; }
+header h1 { font-size: 1.1rem; margin: 0; flex: 1; }
+header a { color: #2f6feb; text-decoration: none; }
+main { padding: 20px; max-width: 960px; margin: 0 auto; }
+section { background: #14171d; border: 1px solid #22262f; border-radius: 10px;
+          padding: 16px; margin-bottom: 16px; }
+section h2 { margin: 0 0 12px; font-size: 1rem; color: #9aa4b2; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+.row > * { flex: 1 1 200px; }
+label { display: block; font-size: 0.8rem; color: #9aa4b2; margin: 8px 0 4px; }
+input, select, button { font-size: 0.95rem; padding: 8px 10px; border-radius: 6px;
+       border: 1px solid #2a2e37; background: #181b22; color: #e6e8eb; width: 100%; }
+button { cursor: pointer; background: #2f6feb; border-color: #2f6feb; font-weight: 600; }
+button:hover { background: #3b7cff; }
+button.secondary { background: #22262f; border-color: #2a2e37; }
+button.danger { background: #f85149; border-color: #f85149; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+.muted { color: #6e7681; font-size: 0.8rem; }
+.status-ok { color: #3fb950; }
+.status-fail { color: #f85149; }
+.status-warn { color: #f0b429; }
+.card { background: #181b22; border: 1px solid #22262f; border-radius: 8px; padding: 16px; margin-bottom: 12px; }
+.card h3 { margin: 0 0 12px; font-size: 1rem; }
+.flag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+.flag-on { background: #1a3d2e; color: #3fb950; }
+.flag-off { background: #3d1a1a; color: #f85149; }
+pre { background: #0c0e12; padding: 10px; border-radius: 6px; overflow: auto; font-size: 0.8rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Configurações</h1>
+  <a href="/">← Dashboard</a>
+</header>
+<main>
+  <section>
+    <h2>Ollama (LLM Local)</h2>
+    <div class="card">
+      <h3>Status Atual</h3>
+      <div class="row">
+        <div>
+          <label>Instalado</label>
+          <span id="status-installed" class="flag flag-off">verificando…</span>
+        </div>
+        <div>
+          <label>Servidor rodando</label>
+          <span id="status-running" class="flag flag-off">verificando…</span>
+        </div>
+        <div>
+          <label>Habilitado no framework</label>
+          <span id="status-enabled" class="flag flag-off">verificando…</span>
+        </div>
+        <div>
+          <label>Modelos disponíveis</label>
+          <span id="status-models" class="muted">-</span>
+        </div>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <div>
+          <label>Base URL</label>
+          <input id="base-url" placeholder="http://localhost:11434" readonly style="background:#0f1115">
+        </div>
+        <div>
+          <label>Modelo padrão</label>
+          <input id="default-model" placeholder="hermes3:3b" readonly style="background:#0f1115">
+        </div>
+      </div>
+      <div id="models-list" class="muted" style="margin-top:8px"></div>
+    </div>
+
+    <div class="card">
+      <h3>Configuração</h3>
+      <div class="row">
+        <div style="flex:1 1 100%; align-items:center">
+          <label style="margin:0; display:flex; align-items:center; gap:8px">
+            <input type="checkbox" id="enabled-checkbox"> Habilitar Ollama no framework
+          </label>
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label>Base URL</label>
+          <input id="cfg-base-url" placeholder="http://localhost:11434">
+        </div>
+        <div>
+          <label>Modelo padrão</label>
+          <input id="cfg-default-model" placeholder="hermes3:3b">
+        </div>
+      </div>
+      <div class="row">
+        <div style="flex:1 1 100%; align-items:center">
+          <label style="margin:0; display:flex; align-items:center; gap:8px">
+            <input type="checkbox" id="install-if-missing"> Instalar Ollama se não estiver instalado
+          </label>
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label>Baixar modelo (opcional)</label>
+          <input id="pull-model" placeholder="hermes3:3b">
+        </div>
+      </div>
+      <button id="save-btn" style="margin-top:12px">Salvar configuração</button>
+      <button id="save-pull-btn" class="secondary" style="margin-top:12px">Salvar e baixar modelo</button>
+      <pre id="config-result" class="hidden"></pre>
+    </div>
+
+    <div class="card">
+      <h3>Ações Rápidas</h3>
+      <div class="row">
+        <button class="secondary" id="btn-status">Verificar Status</button>
+        <button class="secondary" id="btn-install">Instalar Ollama</button>
+        <button class="secondary" id="btn-pull-default">Baixar hermes3:3b</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, opts);
+  if (r.status === 401) { location.href = "/"; throw new Error("nao autenticado"); }
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.detail || data.error || ("HTTP " + r.status));
+  return data;
+}
+
+function showConfigResult(msg, isError = false) {
+  const el = $("config-result");
+  el.classList.remove("hidden");
+  el.textContent = msg;
+  el.style.color = isError ? "#f85149" : "#3fb950";
+}
+
+function renderStatus(data) {
+  // Instalado
+  const installedEl = $("status-installed");
+  installedEl.textContent = data.installed ? "SIM" : "NÃO";
+  installedEl.className = "flag " + (data.installed ? "flag-on" : "flag-off");
+  
+  // Rodando
+  const runningEl = $("status-running");
+  runningEl.textContent = data.running ? "SIM" : "NÃO";
+  runningEl.className = "flag " + (data.running ? "flag-on" : "flag-off");
+  
+  // Habilitado
+  const enabledEl = $("status-enabled");
+  enabledEl.textContent = data.enabled ? "SIM" : "NÃO";
+  enabledEl.className = "flag " + (data.enabled ? "flag-on" : "flag-off");
+  
+  // Modelos
+  const modelsEl = $("status-models");
+  if (data.models && data.models.length) {
+    modelsEl.textContent = data.models.join(", ");
+  } else {
+    modelsEl.textContent = data.running ? "(nenhum modelo baixado)" : "(servidor parado)";
+  }
+  
+  // Lista de modelos
+  const modelsListEl = $("models-list");
+  if (data.models && data.models.length) {
+    modelsListEl.innerHTML = "Modelos: " + data.models.map(m => `<code>${m}</code>`).join(", ");
+  } else {
+    modelsListEl.textContent = "";
+  }
+  
+  // Preenche campos de config
+  $("cfg-base-url").value = data.base_url || "";
+  $("cfg-default-model").value = data.default_model || "";
+  $("base-url").value = data.base_url || "";
+  $("default-model").value = data.default_model || "";
+  $("enabled-checkbox").checked = data.enabled || false;
+}
+
+async function loadStatus() {
+  try {
+    const data = await api("/api/settings/ollama");
+    renderStatus(data);
+  } catch (err) {
+    console.error(err);
+    showConfigResult("Erro ao carregar status: " + err.message, true);
+  }
+}
+
+$("btn-status").addEventListener("click", loadStatus);
+
+$("btn-install").addEventListener("click", async () => {
+  showConfigResult("Instalando Ollama…");
+  try {
+    const data = await api("/api/settings/ollama", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        enabled: "true",
+        install_if_missing: "true",
+        base_url: $("cfg-base-url").value || "http://localhost:11434",
+        default_model: $("cfg-default-model").value || "hermes3:3b",
+      })
+    });
+    showConfigResult(data.message || (data.ok ? "OK" : "Erro"));
+    await loadStatus();
+  } catch (err) {
+    showConfigResult("Erro: " + err.message, true);
+  }
+});
+
+$("btn-pull-default").addEventListener("click", async () => {
+  showConfigResult("Baixando hermes3:3b…");
+  try {
+    const data = await api("/api/settings/ollama", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        enabled: "true",
+        base_url: $("cfg-base-url").value || "http://localhost:11434",
+        default_model: "hermes3:3b",
+        pull_model: "hermes3:3b",
+      })
+    });
+    showConfigResult(data.message || (data.ok ? "OK" : "Erro"));
+    await loadStatus();
+  } catch (err) {
+    showConfigResult("Erro: " + err.message, true);
+  }
+});
+
+$("save-btn").addEventListener("click", async () => {
+  showConfigResult("Salvando…");
+  try {
+    const data = await api("/api/settings/ollama", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        enabled: $("enabled-checkbox").checked ? "true" : "false",
+        base_url: $("cfg-base-url").value,
+        default_model: $("cfg-default-model").value,
+      })
+    });
+    showConfigResult(data.message || (data.ok ? "Salvo ✓" : "Erro"), !data.ok);
+    await loadStatus();
+  } catch (err) {
+    showConfigResult("Erro: " + err.message, true);
+  }
+});
+
+$("save-pull-btn").addEventListener("click", async () => {
+  const model = $("pull-model").value.trim();
+  if (!model) {
+    showConfigResult("Informe o nome do modelo", true);
+    return;
+  }
+  showConfigResult("Salvando e baixando " + model + "…");
+  try {
+    const data = await api("/api/settings/ollama", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        enabled: "true",
+        base_url: $("cfg-base-url").value,
+        default_model: $("cfg-default-model").value,
+        pull_model: model,
+      })
+    });
+    showConfigResult(data.message || (data.ok ? "Salvo e modelo baixado ✓" : "Erro"), !data.ok);
+    await loadStatus();
+  } catch (err) {
+    showConfigResult("Erro: " + err.message, true);
+  }
+});
+
+// Carrega status inicial
+loadStatus();
+</script>
+</body>
+</html>
