@@ -12,6 +12,7 @@ import ipaddress
 import json
 import os
 import socket
+import sys
 import urllib.parse
 import urllib.request
 from datetime import datetime
@@ -36,6 +37,7 @@ from .models import Job, KnowledgeStaging, Page
 
 from .auth import require_admin
 from . import checkpoints
+from .scan import scan_content, merge_scans
 
 __version__ = "1.0.0"
 
@@ -186,41 +188,43 @@ def count_pages(conn, expert) -> int:
 
 # --- Ingestão (learn → staging → sync) --------------------------------------
 
+_RISKY_EXTS = {".pdf", ".docx", ".doc", ".xlsx", ".xls"}
+_SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _extract_isolated(file_path: str, timeout: int = 120) -> str:
+    """Extrai texto num subprocesso isolado (rlimits + timeout) — formatos de risco."""
+    import subprocess
+
+    env = dict(os.environ)
+    env["PYTHONPATH"] = _SRC_DIR + os.pathsep + env.get("PYTHONPATH", "")
+    proc = subprocess.run(
+        [sys.executable, "-m", "brain_tool.extract", str(file_path)],
+        capture_output=True, text=True, timeout=timeout, env=env,
+    )
+    try:
+        data = json.loads(proc.stdout or "")
+    except json.JSONDecodeError as e:
+        raise RuntimeError(
+            f"extrator falhou (saida invalida): {(proc.stdout or '')[:200]}"
+        ) from e
+    if not data.get("ok"):
+        raise ValueError(data.get("error") or "extração falhou")
+    return data["text"]
+
+
 def learn_file(file_path):
-    path = Path(file_path)
-    if not path.exists():
-        raise FileNotFoundError(f"Arquivo nao encontrado: {file_path}")
-    ext = path.suffix.lower()
-    if ext in (".txt", ".md"):
-        with open(path, "r", encoding="utf-8") as f:
-            return f.read()
-    elif ext == ".pdf":
-        try:
-            from pypdf import PdfReader
-        except ImportError as e:
-            raise ImportError("pypdf necessario. pip install 'brain-framework[learn]'") from e
-        r = PdfReader(path)
-        return "\n".join([page.extract_text() or "" for page in r.pages])
-    elif ext in (".docx", ".doc"):
-        try:
-            from docx import Document
-        except ImportError as e:
-            raise ImportError("python-docx necessario. pip install 'brain-framework[learn]'") from e
-        d = Document(path)
-        return "\n".join([p.text for p in d.paragraphs])
-    elif ext in (".xlsx", ".xls", ".csv"):
-        try:
-            import pandas as pd
-        except ImportError as e:
-            raise ImportError("pandas necessario. pip install 'brain-framework[learn]'") from e
-        if ext == ".csv":
-            df = pd.read_csv(path)
-        else:
-            df = pd.read_excel(path)
-        return df.to_string()
-    else:
-        with open(path, "r", encoding="utf-8", errors="ignore") as f:
-            return f.read()
+    """Lê/extrai texto de um arquivo.
+
+    Formatos de risco (PDF/DOCX/planilhas) rodam em subprocesso isolado com
+    limites de CPU/memória/tempo (spec §9.2); texto simples é lido em-processo.
+    """
+    from . import extract as _extract
+
+    ext = Path(file_path).suffix.lower()
+    if ext in _RISKY_EXTS and os.name == "posix":
+        return _extract_isolated(file_path)
+    return _extract.parse(file_path)
 
 
 DEFAULT_CHUNK_SIZE = 4000
@@ -355,6 +359,7 @@ def _learn_file_into_staging(conn, expert, file_path, sync_immediately=False, dr
     content = learn_file(file_path)
     chunks = _chunk_text(content)
     hashes = [generate_canonical_hash(c) for c in chunks]
+    scan = scan_content(content)
     if dry_run:
         return {
             "action": "learn (dry-run)",
@@ -363,16 +368,21 @@ def _learn_file_into_staging(conn, expert, file_path, sync_immediately=False, dr
             "content_length": len(content),
             "chunks": len(chunks),
             "hashes": hashes,
+            "scan": scan,
             "would_add_to_staging": True,
             "sync_immediately": sync_immediately,
         }
     staging_ids = []
+    changes = []
     for chunk in chunks:
-        s = KnowledgeStaging(expert=expert, chunk_data=chunk,
-                             hash_canonical=generate_canonical_hash(chunk))
+        h = generate_canonical_hash(chunk)
+        s = KnowledgeStaging(expert=expert, chunk_data=chunk, hash_canonical=h)
         conn.add(s)
         conn.flush()
         staging_ids.append(s.id)
+        changes.append({"op": "add", "object_hash": h, "content": chunk,
+                        "tipo": "auto_learned",
+                        "titulo": f"Arquivo aprendido (staging #{s.id})"})
     conn.commit()
     result = {
         "action": "learn",
@@ -382,6 +392,8 @@ def _learn_file_into_staging(conn, expert, file_path, sync_immediately=False, dr
         "chunks": len(chunks),
         "hashes": hashes,
         "content_length": len(content),
+        "scan": scan,
+        "changes": changes,
         "status": "pending",
     }
     if sync_immediately:
@@ -393,6 +405,7 @@ def _learn_url_into_staging(conn, expert, url, sync_immediately=False, dry_run=F
     content = _fetch_url(url)
     chunks = _chunk_text(content)
     hashes = [generate_canonical_hash(c) for c in chunks]
+    scan = scan_content(content)
     if dry_run:
         return {
             "action": "learn (dry-run)",
@@ -401,16 +414,21 @@ def _learn_url_into_staging(conn, expert, url, sync_immediately=False, dry_run=F
             "content_length": len(content),
             "chunks": len(chunks),
             "hashes": hashes,
+            "scan": scan,
             "would_add_to_staging": True,
             "sync_immediately": sync_immediately,
         }
     staging_ids = []
+    changes = []
     for chunk in chunks:
-        s = KnowledgeStaging(expert=expert, chunk_data=chunk,
-                             hash_canonical=generate_canonical_hash(chunk))
+        h = generate_canonical_hash(chunk)
+        s = KnowledgeStaging(expert=expert, chunk_data=chunk, hash_canonical=h)
         conn.add(s)
         conn.flush()
         staging_ids.append(s.id)
+        changes.append({"op": "add", "object_hash": h, "content": chunk,
+                        "tipo": "auto_learned",
+                        "titulo": f"Arquivo aprendido (staging #{s.id})"})
     conn.commit()
     result = {
         "action": "learn",
@@ -420,6 +438,8 @@ def _learn_url_into_staging(conn, expert, url, sync_immediately=False, dry_run=F
         "chunks": len(chunks),
         "hashes": hashes,
         "content_length": len(content),
+        "scan": scan,
+        "changes": changes,
         "status": "pending",
     }
     if sync_immediately:
@@ -451,8 +471,15 @@ def _ingest(conn, expert, path, sync_immediately=False):
     p = Path(path)
     if p.is_dir():
         results = learn_directory(conn, expert, path, sync_immediately)
+        all_changes = []
+        scans = []
+        for r in results:
+            if r.get("status") == "success" and isinstance(r.get("result"), dict):
+                all_changes.extend(r["result"].get("changes") or [])
+                scans.append(r["result"].get("scan") or {})
         return {"action": "learn", "expert": expert, "path": path,
-                "type": "directory", "files_processed": len(results), "results": results}
+                "type": "directory", "files_processed": len(results), "results": results,
+                "changes": all_changes, "scan": merge_scans(scans)}
     elif p.is_file():
         return _learn_file_into_staging(conn, expert, path, sync_immediately)
     else:
@@ -505,8 +532,26 @@ def learn(conn, expert, file_path, sync_immediately=False, dry_run=False, actor=
                       metadata={"path": file_path, "sync": sync_immediately, "mode": "sync"})
     _set_job_status(conn, job_id, "processing")
     try:
-        result = _ingest(conn, expert, file_path, sync_immediately)
+        result = _ingest(conn, expert, file_path, sync_immediately=False)
+        changes = result.get("changes") or []
+        scan = result.get("scan") or {}
+        checkpoints.ensure_genesis(conn, expert)
+        scope = checkpoints.scope_for(expert)
+        author = actor or "cli:local"
+        candidate = checkpoints.create_commit(
+            conn, scope, changes, author=author,
+            policy="implicit-admin", ref_name=checkpoints.candidate_ref(job_id),
+            validation_results={"scan": scan, "source": file_path},
+        )
+        conn.commit()
         result["job_id"] = job_id
+        result["status"] = "proposed"
+        result["candidate_ref"] = f"{scope}/{checkpoints.candidate_ref(job_id)}"
+        result["candidate_commit"] = candidate
+        if sync_immediately:
+            merge = checkpoints.merge_candidate(conn, scope, job_id, author)
+            result["merge"] = merge
+            result["status"] = "synced" if merge.get("ok") else "merge_conflict"
     except Exception as e:
         _set_job_status(conn, job_id, "failed", error=str(e))
         raise

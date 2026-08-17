@@ -34,6 +34,7 @@ Uso:
   brain diff --scope ...       - Diferença de árvore entre commits
   brain approve --scope ...    - Registra aprovação/rejeição de um commit
   brain rollback --scope ...   - Move main para um commit anterior
+  brain merge --scope ...      - Publica um candidato (quarentena) na main
   brain update                  - Atualiza framework
   brain sync all               - Sync de todos os brains
   brain admin list             - Lista administradores
@@ -67,7 +68,7 @@ from brain_tool.auth import (
     admin_config_file, load_admins, save_admins, is_admin, is_group_member,
 )
 from brain_tool.db import dispose_engine_for_path
-from brain_tool.checkpoints import verify_scope, history, diff, approve, rollback
+from brain_tool.checkpoints import verify_scope, history, diff, approve, rollback, merge_candidate
 
 # === (fallback sqlite3 legado descontinuado — brain_tool sempre importável) ===
 if False:
@@ -1251,6 +1252,24 @@ def cmd_rollback(args) -> int:
     return 0
 
 
+def cmd_merge(args) -> int:
+    """Publica um candidato (proposto por `learn`) na main, após aprovação."""
+    scope = args.scope
+    conn = _open_scope_session(scope)
+    if conn is None:
+        print(f"Scope {scope} sem brain.db.", file=sys.stderr)
+        return 1
+    try:
+        result = merge_candidate(conn, scope, args.candidate, "cli:local")
+    finally:
+        conn.close()
+    if not result.get("ok"):
+        print(f"Erro: {result.get('error')}", file=sys.stderr)
+        return 1
+    print(f"\n= Merge concluido — {scope} -> {result['commit'][:16]}...")
+    return 0
+
+
 def cmd_update(args) -> int:
     """Atualiza o Brain Framework via git pull."""
     print(f"\n=== Brain: Atualizando framework ===")
@@ -1655,6 +1674,7 @@ Comandos de Gestão:
   diff --scope S       - Diferença de árvore entre commits (add/remove/change)
   approve --scope S    - Registra aprovação/rejeição de um commit
   rollback --scope S   - Move main para commit anterior (não destrutivo)
+  merge --scope S      - Publica um candidato (learn) na main, após aprovação
   update               - Atualiza o framework via git pull origin main
   sync all             - Faz sync de todos os brains
   admin list           - Lista administradores configurados
@@ -1757,6 +1777,11 @@ Para conhecer mais:
     p_rollback.add_argument('--to', required=True, help='Commit de destino')
     p_rollback.add_argument('--yes', action='store_true', help='Sem confirmação')
     p_rollback.set_defaults(func=lambda args: cmd_rollback(args))
+
+    p_merge = sp.add_parser('merge', help='Publica um candidato (learn) na main, após aprovação')
+    p_merge.add_argument('--scope', required=True, help='Scope (global ou expert/<nome>)')
+    p_merge.add_argument('--candidate', required=True, help='job_id do candidato (retornado pelo learn)')
+    p_merge.set_defaults(func=lambda args: cmd_merge(args))
 
     p_update = sp.add_parser('update', help='Atualiza o framework')
     p_update.set_defaults(func=lambda args: cmd_update(args))
@@ -1900,7 +1925,8 @@ Para conhecer mais:
     p_learn = sp.add_parser('learn', help='Processa arquivo/diretorio para staging (brain_tool)')
     p_learn.add_argument('--expert', required=True, help='Nome do expert')
     p_learn.add_argument('--path', required=True, help='Caminho do arquivo ou diretorio')
-    p_learn.add_argument('--sync', action='store_true', help='Sync imediatamente apos learn')
+    p_learn.add_argument('--sync', action='store_true',
+                         help='Publica imediatamente (aprovação implícita); sem isso, fica em quarentena (use `brain merge`)')
     p_learn.add_argument('--brain-path', help='Caminho explicito para brain.db')
     p_learn.add_argument('--global', action='store_true', dest='global_brain', help='Usa brain global')
     p_learn.add_argument('--dry-run', action='store_true', help='Preview sem executar')

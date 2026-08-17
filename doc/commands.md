@@ -124,6 +124,7 @@ brain verify          # integridade dos checkpoints assinados (todos os scopes)
 brain log --scope S   # histórico de commits (global ou expert/<nome>)
 brain diff --scope S  # diferença de árvore entre commits (add/remove/change)
 brain approve --scope S --candidate C [--policy P] [--note N]
+brain merge --scope S --candidate JOB   # publica um candidato (learn) na main
 brain rollback --scope S --to C [--yes]   # move main para commit anterior
 ```
 
@@ -164,8 +165,9 @@ brain forget   --expert maria --id 5 [--dry-run]
 brain synthesize   --expert maria [--type summary]
 brain consolidate  --expert maria [--dry-run]
 
-# Ingestão (staging → sync)
+# Ingestão (learn propõe; --sync publica na hora)
 brain learn --expert maria --path /caminho/arquivo_ou_dir [--sync] [--dry-run]
+# sem --sync: fica em quarentena — publique com `brain merge --scope expert/maria --candidate <job_id>`
 brain sync-tb --expert maria   # move staging → pages (idempotente por hash)
 
 # Diagnóstico
@@ -204,7 +206,7 @@ próprio processo (fallback — spec §4.6).
 
 ---
 
-## Checkpoints assinados (governança — Fases 1–2)
+## Checkpoints assinados (governança — Fases 1–3)
 
 Toda escrita (`remember`, `forget`, `sync`) cria um **commit assinado** (Ed25519)
 e avança a ref `main` do scope (`global` ou `expert/<nome>`). A chave é gerada
@@ -216,18 +218,26 @@ brain verify [--scope global|expert/<nome>]   # valida cadeia + assinaturas + co
 brain log --scope expert/maria               # histórico de commits (mais novo primeiro)
 brain diff --scope expert/maria              # add/remove/change entre main e o parent
 brain approve --scope expert/maria --candidate <commit> [--policy P] [--note N]
+brain merge --scope expert/maria --candidate <job_id>   # publica um candidato
 brain rollback --scope expert/maria --to <commit> [--yes]   # move main, não apaga
 ```
 
+**Quarentena (Fase 3)**: `brain learn --path X` **sem** `--sync` cria um commit
+**candidato** (`refs[<scope>/candidate/<job_id>]`) e **não publica** — o conteúdo
+fica invisível ao recall até `brain merge`. `--sync` = aprovação implícita
+(publica na hora). Todo conteúdo importado passa por **scan de conteúdo suspeito**
+(instruções/credenciais/PII) gravado no candidato, e PDF/DOCX/planilhas são
+extraídos em **subprocesso isolado** (limites de CPU/memória/tempo) com
+verificação de MIME e tamanho máximo.
+
 `verify` detecta adulteração (conteúdo, campos do commit, assinatura); `check`
 também recalcula o `hash_canonical` das páginas legadas (ponte). `rollback` é
-não-destrutivo (commits/objetos ficam; só o ponteiro `main` muda e as `pages`
-são reconstruídas). Commits são referenciáveis por id completo ou prefixo único.
+não-destrutivo. Commits são referenciáveis por id completo ou prefixo único.
 Páginas migradas de antes dos checkpoints entram como commit *genesis* com
 `integrity: unverified` — sem garantia retroativa.
 
-> Design completo e fases: `plan/checkpoints-assinados.md`. Fases 3–4 pendentes:
-> quarentena/prompt injection e `promote` com dupla aprovação + RBAC.
+> Design completo e fases: `plan/checkpoints-assinados.md`. Fase 4 pendente:
+> `promote` com dupla aprovação + RBAC.
 
 ---
 

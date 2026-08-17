@@ -202,11 +202,13 @@ def create_commit(
     policy: str = POLICY_IMPLICIT,
     message: Optional[str] = None,
     validation_results: Optional[dict] = None,
+    ref_name: str = "main",
 ) -> str:
-    """Cria o commit assinado e avança a ref main (sem commit — o chamador commita).
+    """Cria o commit assinado e avança a ref (default `main`; sem commit — o chamador commita).
 
-    `changes`: lista de dicts `{"op": "add"|"remove", "object_hash", "content"?,
-    "tipo"?, "titulo"?}`.
+    `ref_name="candidate/<job_id>"` cria uma branch candidata (quarentena) sem
+    tocar na `main`. `changes`: lista de dicts `{"op": "add"|"remove",
+    "object_hash", "content"?, "tipo"?, "titulo"?}`.
     """
     key = crypto.load_or_create_signing_key()
     parents = _current_parents(conn, scope)
@@ -243,7 +245,7 @@ def create_commit(
         conn.add(CommitItem(commit_id=chash, op=ch["op"],
                             object_hash=ch["object_hash"],
                             tipo=ch.get("tipo", ""), titulo=ch.get("titulo")))
-    _set_ref(conn, f"{scope}/main", chash)
+    _set_ref(conn, f"{scope}/{ref_name}", chash)
     _audit(conn, "commit", scope, author, {"commit": chash, "changes": len(changes)})
     return chash
 
@@ -277,6 +279,59 @@ def ensure_genesis(conn, expert: str) -> None:
         validation_results={"migrated_from": "pages", "integrity": "unverified"},
     )
     conn.commit()
+
+
+def candidate_ref(job_id: str) -> str:
+    return f"candidate/{job_id}"
+
+
+def get_candidate_commit(conn, scope: str, job_id: str) -> Optional[Commit]:
+    ref = conn.get(Ref, f"{scope}/{candidate_ref(job_id)}")
+    if ref is None:
+        return None
+    return conn.get(Commit, ref.commit_id)
+
+
+def merge_candidate(conn, scope: str, job_id: str, author: str) -> dict:
+    """Avança `main` para o commit candidato (fast-forward) e materializa `pages`.
+
+    A quarentena termina aqui: só faz fast-forward se a main não mudou desde a
+    proposta; caso contrário retorna conflito (resolução é P2).
+    """
+    ref = conn.get(Ref, f"{scope}/{candidate_ref(job_id)}")
+    if ref is None:
+        return {"ok": False, "error": "candidato não encontrado"}
+    candidate = conn.get(Commit, ref.commit_id)
+    if candidate is None:
+        return {"ok": False, "error": "commit candidato ausente"}
+
+    main_ref = conn.get(Ref, f"{scope}/main")
+    main_tip = main_ref.commit_id if main_ref else None
+    parents = json.loads(candidate.parent_hashes or "[]")
+    expected = [main_tip] if main_tip else []
+    if parents != expected:
+        return {"ok": False,
+                "error": "conflito: main avançou desde a proposta (não é fast-forward)"}
+
+    expert = expert_for(scope)
+    for it in conn.scalars(
+        select(CommitItem).where(CommitItem.commit_id == candidate.id,
+                                 CommitItem.op == "add")
+    ).all():
+        obj = conn.get(KnowledgeObject, it.object_hash)
+        if obj is None:
+            continue
+        existing = conn.scalars(
+            select(Page).where(Page.expert == expert,
+                               Page.hash_canonical == it.object_hash)
+        ).first()
+        if existing is None:
+            conn.add(Page(expert=expert, tipo=it.tipo, titulo=it.titulo,
+                          corpo=obj.content, hash_canonical=it.object_hash))
+    _set_ref(conn, f"{scope}/main", candidate.id)
+    _audit(conn, "merge", scope, author, {"candidate": candidate.id})
+    conn.commit()
+    return {"ok": True, "commit": candidate.id}
 
 
 def verify_scope(conn, scope: str) -> dict:
