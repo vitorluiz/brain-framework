@@ -223,6 +223,25 @@ def get_engine(database_url: str) -> Engine:
     return _engines[database_url]
 
 
+def dispose_engine_for_path(db_path: str) -> None:
+    """Descarta engines SQLite que apontam para `db_path` (restore/backup).
+
+    Depois de sobrescrever um brain.db no disco, qualquer engine em cache
+    (pool de conexões) ainda pode ler estado antigo (WAL). Descarta esses
+    engines para que a próxima sessão reabra um estado limpo.
+    """
+    from sqlalchemy.engine import make_url
+
+    target = os.path.abspath(os.fspath(Path(db_path).expanduser().resolve()))
+    for url, engine in list(_engines.items()):
+        if not url.startswith("sqlite:///"):
+            continue
+        db = make_url(url).database
+        if db and os.path.abspath(db) == target:
+            _engines.pop(url, None)
+            engine.dispose()
+
+
 def initialize_schema(engine: Engine) -> None:
     """Cria tabelas (se ausentes), migra brain.db legados e grava a versão."""
     if id(engine) in _initialized:

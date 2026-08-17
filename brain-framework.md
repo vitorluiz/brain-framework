@@ -700,18 +700,20 @@ Maria: "A empresa funciona de segunda a sexta, das 8h às 18h."
 - `synthesize` para visão geral do conhecimento
 
 ### 8.3 Backup & Restore
-- `brain backup` cria backup completo
-- Restore: futuro (copiar brain.db de volta manualmente pelo momento)
+- `brain backup` cria backup completo (snapshot consistente via SQLite backup API)
+- `brain restore --from <ts>` restaura de um backup (com `--list`, `--expert`, `--global`, `--yes`)
+- Antes de sobrescrever, o estado atual é preservado em `<brain.db>.pre-restore-<ts>`
 
 ---
 
 ## 9. Roadmap (Futuro)
 
 ### 9.1 Próximas Iterações
-1. **Dashboard web** (FastAPI + simples UI) para admins gerenciarem remotely
-2. **Celery + Redis** para async jobs (opcional, com fallback síncrono)
+1. ~~Dashboard web~~ — **entregue** (`brain dashboard`, spec §6.3)
+2. ~~Celery + Redis para async jobs~~ — **entregue** (`brain-worker`, fallback síncrono)
 3. **Embedings + busca semântica** (opcional, para consulta mais inteligente)
 4. **MCP integration** para agents como José acessarem sistemas externos
+5. **WhatsApp/Hermes Gateway** — validação admin + repasse de comandos (spec §5)
 
 ### 9.2 Non-Goals (v1)
 - Dashboard: cockpit para admins (pode ser futuro)

@@ -28,6 +28,7 @@ Uso:
   brain capture --expert ...   - Captura classificação
   brain global learn --path ...- Aprende conhecimento global
   brain backup                 - Backup de todos os brains
+  brain restore --from <ts>    - Restaura brains de um backup
   brain update                  - Atualiza framework
   brain sync all               - Sync de todos os brains
   brain admin list             - Lista administradores
@@ -60,6 +61,7 @@ from brain_tool import (
 from brain_tool.auth import (
     admin_config_file, load_admins, save_admins, is_admin, is_group_member,
 )
+from brain_tool.db import dispose_engine_for_path
 
 # === (fallback sqlite3 legado descontinuado — brain_tool sempre importável) ===
 if False:
@@ -889,7 +891,7 @@ def cmd_backup(args) -> int:
         try:
             ndir = os.path.join(backup_dir, name)
             os.makedirs(ndir, exist_ok=True)
-            shutil.copy2(bp, os.path.join(ndir, "brain.db"))
+            _snapshot_sqlite(bp, os.path.join(ndir, "brain.db"))
             sp_src = os.path.join(os.path.dirname(bp), ".brain_schema_template.yaml")
             if os.path.exists(sp_src):
                 shutil.copy2(sp_src, os.path.join(ndir, ".brain_schema_template.yaml"))
@@ -910,6 +912,201 @@ def cmd_backup(args) -> int:
     print(f"\n= Backup concluido: {count} brains")
     print(f"  Diretorio: {backup_dir}")
     return 0
+
+
+# --- Restore ------------------------------------------------------------------
+
+def _snapshot_sqlite(src: str, dst: str) -> None:
+    """Cópia consistente (online backup) de um SQLite, incluindo o WAL.
+
+    `shutil.copy2` sozinho perde transações ainda no `-wal`; o backup API do
+    sqlite3 captura tudo o que está commitado.
+    """
+    import sqlite3 as _sqlite3
+
+    src_conn = _sqlite3.connect(src)
+    try:
+        dst_conn = _sqlite3.connect(dst)
+        try:
+            src_conn.backup(dst_conn)
+        finally:
+            dst_conn.close()
+    finally:
+        src_conn.close()
+
+
+def _clear_sqlite_sidecars(db_path: str) -> None:
+    """Remove sidecars residuais (-wal/-shm/-journal) após sobrescrever um db."""
+    for suffix in ("-wal", "-shm", "-journal"):
+        p = f"{db_path}{suffix}"
+        if os.path.exists(p):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+
+def _list_available_backups() -> List[Dict[str, Any]]:
+    """Backups disponíveis em backups_dir(), ordenados por timestamp (mais novo)."""
+    bdir = backups_dir()
+    if not os.path.isdir(bdir):
+        return []
+    found: List[Dict[str, Any]] = []
+    for d in sorted(os.listdir(bdir), reverse=True):
+        full = os.path.join(bdir, d)
+        mp = os.path.join(full, "manifest.json")
+        if not (os.path.isdir(full) and os.path.exists(mp)):
+            continue
+        try:
+            with open(mp) as f:
+                m = json.load(f)
+            brains = [b.get("name") for b in m.get("brains", []) if b.get("name")]
+            found.append({
+                "timestamp": m.get("timestamp", d),
+                "dir": full,
+                "brains": brains,
+                "count": m.get("count", len(brains)),
+            })
+        except (OSError, json.JSONDecodeError):
+            continue
+    return found
+
+
+def _resolve_backup_dir(from_spec: str) -> str:
+    """Resolve o diretório de um backup a partir de caminho ou timestamp."""
+    candidate = os.path.abspath(os.path.expanduser(from_spec))
+    if os.path.isdir(candidate) and os.path.exists(os.path.join(candidate, "manifest.json")):
+        return candidate
+
+    bdir = backups_dir()
+    # Aceita "<timestamp>" puro ou "backup_<timestamp>" como nome de pasta.
+    name = from_spec if from_spec.startswith("backup_") else f"backup_{from_spec}"
+    full = os.path.join(bdir, name)
+    if os.path.isdir(full) and os.path.exists(os.path.join(full, "manifest.json")):
+        return full
+
+    raise FileNotFoundError(
+        f"Backup nao encontrado para '{from_spec}' em {bdir}"
+        " (use `brain restore --list` para listar os disponiveis)"
+    )
+
+
+def _read_backup_manifest(backup_dir: str) -> Dict[str, Any]:
+    mpath = os.path.join(backup_dir, "manifest.json")
+    if not os.path.exists(mpath):
+        raise FileNotFoundError(f"manifest.json ausente em {backup_dir}")
+    with open(mpath) as f:
+        return json.load(f)
+
+
+def restore_backup(backup_dir: str, target_expert: Optional[str] = None,
+                   global_only: bool = False) -> List[Dict[str, Any]]:
+    """Restaura os brain.db de um backup, preservando o estado atual.
+
+    Antes de sobrescrever cada brain.db, faz uma cópia de segurança
+    `<brain.db>.pre-restore-<ts>`. Retorna um resultado por brain restaurado.
+    """
+    manifest = _read_backup_manifest(backup_dir)
+    ts = manifest.get("timestamp") or os.path.basename(
+        os.path.abspath(backup_dir)
+    ).replace("backup_", "")
+
+    results: List[Dict[str, Any]] = []
+    for entry in manifest.get("brains", []):
+        name = entry.get("name")
+        if not name:
+            continue
+        if name == "global":
+            if target_expert:
+                continue
+            dest = get_brain_db_path(global_brain=True)
+        else:
+            if global_only or (target_expert and name != target_expert):
+                continue
+            dest = get_brain_db_path(expert=name)
+
+        src = os.path.join(backup_dir, name, "brain.db")
+        if not os.path.exists(src):
+            results.append({"name": name, "status": "missing",
+                            "error": f"arquivo ausente no backup: {src}"})
+            continue
+
+        is_global = (name == "global")
+        pre_restore = None
+        if os.path.exists(dest):
+            # Fecha conexões em cache (checkpoint do WAL) e preserva o estado atual.
+            dispose_engine_for_path(dest)
+            pre_restore = f"{dest}.pre-restore-{ts}"
+            _snapshot_sqlite(dest, pre_restore)
+
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        shutil.copy2(src, dest)
+        _clear_sqlite_sidecars(dest)
+        # Garante que o processo atual reabra um estado limpo (engine resetado).
+        dispose_engine_for_path(dest)
+        results.append({"name": name, "status": "restored",
+                        "dest": dest, "pre_restore": pre_restore})
+    return results
+
+
+def cmd_restore(args) -> int:
+    """Restaura brains a partir de um backup (brain restore --from <ts>)."""
+    if getattr(args, "list_backups", False):
+        backups = _list_available_backups()
+        print("\n=== Backups disponiveis ===")
+        if not backups:
+            print("  (nenhum backup encontrado)")
+            return 0
+        for b in backups:
+            print(f"  - {b['timestamp']}  ({b['count']} brains): {', '.join(b['brains'])}")
+        return 0
+
+    from_spec = getattr(args, "from_spec", None)
+    if not from_spec:
+        print("Erro: informe --from <timestamp|diretorio> (ou --list para listar)",
+              file=sys.stderr)
+        return 1
+
+    backup_dir = _resolve_backup_dir(from_spec)
+    manifest = _read_backup_manifest(backup_dir)
+    names = [b.get("name") for b in manifest.get("brains", []) if b.get("name")]
+    print(f"\n=== Brain: Restore de backup ===")
+    print(f"  Backup: {backup_dir}")
+    print(f"  Timestamp: {manifest.get('timestamp')}")
+    print(f"  Brains: {', '.join(names) or '(vazio)'}")
+
+    target = getattr(args, "expert", None)
+    if target:
+        print(f"  Escopo: expert '{target}'")
+    elif getattr(args, "global_brain", False):
+        print("  Escopo: apenas global")
+
+    if not getattr(args, "yes", False):
+        try:
+            resp = input("\nSobrescrever os brain.db atuais com este backup? [s/N] ")
+        except EOFError:
+            resp = "n"
+        if resp.strip().lower() not in ("s", "sim", "y", "yes"):
+            print("Restore cancelado.")
+            return 1
+
+    results = restore_backup(
+        backup_dir,
+        target_expert=target,
+        global_only=getattr(args, "global_brain", False),
+    )
+    restored = 0
+    for r in results:
+        if r["status"] == "restored":
+            restored += 1
+            print(f"  + {r['name']}: restaurado -> {r['dest']}")
+            if r.get("pre_restore"):
+                print(f"      (estado anterior preservado em {r['pre_restore']})")
+        else:
+            print(f"  - {r['name']}: {r.get('error', 'falha')}")
+
+    print(f"\n= Restore concluido: {restored} brains restaurados")
+    return 0 if results else 1
 
 
 def cmd_update(args) -> int:
@@ -1310,6 +1507,7 @@ Comandos de Gestão:
   model NAME [MODEL]   - Define o brain (LLM) do profile (--fallback para failover)
   global learn         - Aprende conhecimento para o brain global
   backup               - Backup de todos os brains (global + experts)
+  restore --from TS    - Restaura brains de um backup (--list lista backups)
   update               - Atualiza o framework via git pull origin main
   sync all             - Faz sync de todos os brains
   admin list           - Lista administradores configurados
@@ -1372,6 +1570,18 @@ Para conhecer mais:
 
     p_backup = sp.add_parser('backup', help='Backup de todos os brains')
     p_backup.set_defaults(func=lambda args: cmd_backup(args))
+
+    p_restore = sp.add_parser('restore', help='Restaura brains a partir de um backup')
+    p_restore.add_argument('--from', dest='from_spec',
+                           help='Timestamp ou diretorio do backup (ex: backup_20260816_120000)')
+    p_restore.add_argument('--expert', help='Restaura apenas este expert')
+    p_restore.add_argument('--global', action='store_true', dest='global_brain',
+                           help='Restaura apenas o brain global')
+    p_restore.add_argument('--yes', action='store_true',
+                           help='Restaura sem pedir confirmacao')
+    p_restore.add_argument('--list', action='store_true', dest='list_backups',
+                           help='Lista os backups disponiveis e sai')
+    p_restore.set_defaults(func=lambda args: cmd_restore(args))
 
     p_update = sp.add_parser('update', help='Atualiza o framework')
     p_update.set_defaults(func=lambda args: cmd_update(args))

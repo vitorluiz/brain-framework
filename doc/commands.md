@@ -116,9 +116,15 @@ brain global learn --path /documentos/gerais/ [--sync] [--dry-run]
 
 ```bash
 brain backup          # backup de global + experts → backups/backup_<ts>/ + manifest.json
+brain restore --list  # lista backups disponíveis
+brain restore --from <ts> [--expert <n> | --global] [--yes]   # restaura de um backup
 brain update          # git pull origin main no diretório do framework
 brain sync all        # sync (staging → pages) de global + todos os experts
 ```
+
+O `restore` localiza o backup pelo timestamp (ou caminho do diretório), copia os
+`brain.db` de volta e, antes de sobrescrever, preserva o estado atual em
+`<brain.db>.pre-restore-<ts>`. Sem `--yes`, pede confirmação.
 
 ### Administradores
 
@@ -187,8 +193,9 @@ duplica conhecimento.
 ### Jobs (spec §4.5)
 
 O `learn` registra um job em `jobs` com ciclo `enqueued → processing → completed`
-(ou `failed`). Em v1 a ingestão é **síncrona** (fallback permitido pelo spec
-§4.6 — Celery/Redis é opcional); o job registra o histórico real do processamento.
+(ou `failed`). Com Celery + Redis configurados (`REDIS_URL`/`CELERY_BROKER_URL`),
+a ingestão roda **assíncrona** no worker; sem broker, roda **síncrona** no
+próprio processo (fallback — spec §4.6).
 
 ---
 
