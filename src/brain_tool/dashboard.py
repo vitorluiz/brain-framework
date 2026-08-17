@@ -47,8 +47,11 @@ from .brain import (
     _hermes_config_get,
     _hermes_config_set,
     _read_fallback_chain,
+    _read_profile_env,
     _set_fallback_providers,
+    _update_profile_env,
     _write_soul,
+    hermes_profiles_root,
 )
 
 __all__ = [
@@ -233,6 +236,25 @@ def _load_or_create_token() -> str:
     return generated
 
 
+def rotate_access_token() -> str:
+    """Gera e persiste um novo token, invalidando o token anterior."""
+    if os.environ.get("BRAIN_DASHBOARD_TOKEN"):
+        raise RuntimeError(
+            "BRAIN_DASHBOARD_TOKEN está definido; remova-o para gerar um token novo"
+        )
+    path = get_brain_root() / ".dashboard_token"
+    generated = secrets.token_hex(32)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path.write_text(generated, encoding="utf-8")
+    os.chmod(path, 0o600)
+    return generated
+
+
+def discard_access_token() -> None:
+    """Descarta o token persistido ao encerrar a sessão do dashboard."""
+    (get_brain_root() / ".dashboard_token").unlink(missing_ok=True)
+
+
 def get_access_token() -> str:
     """Retorna o token de acesso persistente (CLI `brain dashboard token`)."""
     return _load_or_create_token()
@@ -395,13 +417,18 @@ def _require_profile(name: str) -> str:
 
 def create_app(secret: Optional[str] = None, token: Optional[str] = None) -> FastAPI:
     secret = secret or _load_or_create_secret()
-    access_token = token or _load_or_create_token()
+    configured_token = token
     secure_cookies = os.environ.get("BRAIN_DASHBOARD_SECURE_COOKIES", "") in ("1", "true", "yes")
     limiter = _LoginRateLimiter(_LOGIN_MAX_FAILURES, _LOGIN_LOCKOUT_SECONDS)
 
     # Templates
     templates_dir = Path(__file__).parent.parent / "templates"
     templates = Jinja2Templates(directory=str(templates_dir))
+
+    def current_access_token() -> str:
+        # Apps created without an explicit token follow the persisted session,
+        # so `brain dashboard token --rotate` takes effect without a restart.
+        return configured_token if configured_token is not None else _load_or_create_token()
 
     app = FastAPI(title="Brain Dashboard", docs_url=None, redoc_url=None)
 
@@ -413,7 +440,9 @@ def create_app(secret: Optional[str] = None, token: Optional[str] = None) -> Fas
             return user
         # 2) token bearer (Authorization: Bearer <token>)
         auth = request.headers.get("authorization", "")
-        if auth.lower().startswith("bearer ") and hmac.compare_digest(auth[7:].strip(), access_token):
+        if auth.lower().startswith("bearer ") and hmac.compare_digest(
+            auth[7:].strip(), current_access_token()
+        ):
             return "admin"
         raise HTTPException(status_code=401, detail="nao autenticado")
 
@@ -438,7 +467,7 @@ def create_app(secret: Optional[str] = None, token: Optional[str] = None) -> Fas
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request, token: Optional[str] = None):
         if token:
-            if hmac.compare_digest(token, access_token):
+            if hmac.compare_digest(token, current_access_token()):
                 _audit("token_login")
                 resp = RedirectResponse("/", status_code=302)
                 resp.set_cookie(_COOKIE, _make_token(secret, "admin"),
@@ -478,7 +507,7 @@ def create_app(secret: Optional[str] = None, token: Optional[str] = None) -> Fas
 
     @app.post("/login-token")
     async def login_token(token: str = Form(...), _origin: None = Depends(same_origin)):
-        if not hmac.compare_digest(token, access_token):
+        if not hmac.compare_digest(token, current_access_token()):
             _audit("token_login_failure")
             return JSONResponse({"ok": False, "error": "token invalido"}, status_code=401)
         _audit("token_login")
@@ -680,6 +709,13 @@ def create_app(secret: Optional[str] = None, token: Optional[str] = None) -> Fas
                 pdir, [{"provider": fallback_provider, "model": fallback_model}]
             )
 
+        if not errors and provider == "ollama":
+            errors += _update_profile_env(str(pdir), {
+                "BRAIN_OLLAMA_ENABLED": "true",
+                "BRAIN_OLLAMA_BASE_URL": base_url or "http://localhost:11434",
+                "BRAIN_OLLAMA_DEFAULT_MODEL": model or "hermes3:3b",
+            })
+
         if errors:
             raise HTTPException(status_code=500, detail="; ".join(errors))
 
@@ -701,22 +737,37 @@ def create_app(secret: Optional[str] = None, token: Optional[str] = None) -> Fas
         })
 
     @app.get("/api/settings/ollama")
-    async def api_get_ollama_settings(user: str = Depends(current_user)):
-        """Retorna configuração atual do Ollama."""
-        import os
-        from pathlib import Path
-        env_path = Path(".env")
-        base_url = os.environ.get("BRAIN_OLLAMA_BASE_URL", "http://localhost:11434")
-        default_model = os.environ.get("BRAIN_OLLAMA_DEFAULT_MODEL", "hermes3:3b")
-        enabled = bool(os.environ.get("BRAIN_OLLAMA_BASE_URL"))
-        
-        # Verifica status
-        from brain_tool.brain import _ollama_check_installed, _ollama_check_running, _ollama_list_models
+    async def api_get_ollama_settings(
+        profile: Optional[str] = None,
+        user: str = Depends(current_user),
+    ):
+        """Retorna configuração do Ollama do profile Hermes selecionado."""
+        from brain_tool.brain import (
+            _ollama_check_installed, _ollama_check_running, _ollama_list_models,
+        )
+        profiles_root = Path(hermes_profiles_root())
+        profiles = sorted(
+            p.name for p in profiles_root.iterdir()
+            if p.is_dir() and not p.name.startswith(".")
+        ) if profiles_root.is_dir() else []
+        if not profile:
+            return {"profiles": profiles, "profile": None}
+        pdir = _require_profile(profile)
+        env = _read_profile_env(str(pdir))
+        provider = _hermes_config_get(pdir, "model.provider") or ""
+        base_url = env.get("BRAIN_OLLAMA_BASE_URL") or _hermes_config_get(
+            pdir, "model.base_url"
+        ) or "http://localhost:11434"
+        default_model = env.get("BRAIN_OLLAMA_DEFAULT_MODEL") or _hermes_config_get(
+            pdir, "model.default"
+        ) or "hermes3:3b"
+        enabled = env.get("BRAIN_OLLAMA_ENABLED", "").lower() == "true" or provider == "ollama"
         installed = _ollama_check_installed()
         running = _ollama_check_running(base_url) if installed else False
         models = _ollama_list_models(base_url) if running else []
-        
         return {
+            "profiles": profiles,
+            "profile": profile,
             "enabled": enabled,
             "base_url": base_url,
             "default_model": default_model,
@@ -727,6 +778,7 @@ def create_app(secret: Optional[str] = None, token: Optional[str] = None) -> Fas
 
     @app.post("/api/settings/ollama")
     async def api_set_ollama_settings(
+        profile: str = Form(...),
         enabled: bool = Form(False),
         base_url: str = Form("http://localhost:11434"),
         default_model: str = Form("hermes3:3b"),
@@ -734,82 +786,57 @@ def create_app(secret: Optional[str] = None, token: Optional[str] = None) -> Fas
         pull_model: str = Form(""),
         user: str = Depends(current_user),
     ):
-        """Configura Ollama: habilita/desabilita, instala, puxa modelo."""
-        import os
-        from pathlib import Path
+        """Configura Ollama no .env e config.yaml do profile selecionado."""
+        import shutil
         import subprocess
-        
-        env_path = Path(".env")
-        if not env_path.exists():
-            raise HTTPException(status_code=400, detail="Arquivo .env não encontrado")
-        
-        content = env_path.read_text()
-        lines = content.splitlines()
-        
+        from brain_tool.brain import _ollama_check_running
+        pdir = _require_profile(profile)
+        base_url = (base_url or "http://localhost:11434").strip()
+        default_model = (default_model or "hermes3:3b").strip()
+        errors: List[str] = []
+
         if enabled:
-            # Habilita Ollama
-            vars_to_set = {
+            errors += _update_profile_env(str(pdir), {
+                "BRAIN_OLLAMA_ENABLED": "true",
                 "BRAIN_OLLAMA_BASE_URL": base_url,
                 "BRAIN_OLLAMA_DEFAULT_MODEL": default_model,
-            }
-            
-            updated = set()
-            new_lines = []
-            for line in lines:
-                key = line.split("=")[0].strip() if "=" in line else line.strip()
-                if key in vars_to_set:
-                    new_lines.append(f"{key}={vars_to_set[key]}")
-                    updated.add(key)
-                else:
-                    new_lines.append(line)
-            
-            for key in vars_to_set:
-                if key not in updated:
-                    new_lines.append(f"{key}={vars_to_set[key]}")
-            
-            env_path.write_text("\n".join(new_lines) + "\n")
-            os.environ["BRAIN_OLLAMA_BASE_URL"] = base_url
-            os.environ["BRAIN_OLLAMA_DEFAULT_MODEL"] = default_model
-            
-            # Instala se solicitado e não instalado
-            if install_if_missing:
-                import shutil
-                if not shutil.which("ollama"):
-                    result = subprocess.run(
-                        "curl -fsSL https://ollama.com/install.sh | sh",
-                        shell=True, capture_output=True, text=True, timeout=120
-                    )
-                    if result.returncode != 0:
-                        return {"ok": False, "error": f"Falha ao instalar Ollama: {result.stderr}"}
-        
-        else:
-            # Desabilita Ollama
-            new_lines = []
-            for line in lines:
-                key = line.split("=")[0].strip() if "=" in line else line.strip()
-                if key in ("BRAIN_OLLAMA_BASE_URL", "BRAIN_OLLAMA_DEFAULT_MODEL"):
-                    new_lines.append(f"# {line}")
-                else:
-                    new_lines.append(line)
-            
-            env_path.write_text("\n".join(new_lines) + "\n")
-            os.environ.pop("BRAIN_OLLAMA_BASE_URL", None)
-            os.environ.pop("BRAIN_OLLAMA_DEFAULT_MODEL", None)
-        
-        # Puxa modelo se solicitado
-        if pull_model:
-            import shutil
-            if shutil.which("ollama"):
+            })
+            if not errors:
+                errors += _hermes_config_set(pdir, "model.provider", "ollama")
+                errors += _hermes_config_set(pdir, "model.default", default_model)
+                errors += _hermes_config_set(pdir, "model.base_url", base_url)
+            if install_if_missing and not shutil.which("ollama"):
                 result = subprocess.run(
-                    ["ollama", "pull", pull_model],
-                    capture_output=True, text=True, timeout=300
+                    "curl -fsSL https://ollama.com/install.sh | sh",
+                    shell=True, capture_output=True, text=True, timeout=120,
                 )
                 if result.returncode != 0:
-                    return {"ok": False, "error": f"Falha ao baixar modelo: {result.stderr}"}
-            else:
-                return {"ok": False, "error": "Ollama não instalado para baixar modelo"}
-        
-        return {"ok": True, "message": "Configuração salva. Reinicie o dashboard/worker para aplicar."}
+                    return {"ok": False, "error": f"Falha ao instalar Ollama: {result.stderr}"}
+        else:
+            errors += _update_profile_env(str(pdir), {
+                "BRAIN_OLLAMA_ENABLED": "false",
+                "BRAIN_OLLAMA_BASE_URL": base_url,
+                "BRAIN_OLLAMA_DEFAULT_MODEL": default_model,
+            })
+
+        if errors:
+            raise HTTPException(status_code=500, detail="; ".join(errors))
+
+        if pull_model:
+            if not shutil.which("ollama"):
+                return {"ok": False, "error": "Ollama não instalado; habilite a instalação primeiro"}
+            if not _ollama_check_running(base_url):
+                return {"ok": False, "error": "Ollama instalado, mas o servidor não está rodando"}
+            result = subprocess.run(
+                ["ollama", "pull", pull_model.strip()],
+                capture_output=True, text=True, timeout=300,
+            )
+            if result.returncode != 0:
+                return {"ok": False, "error": f"Falha ao baixar modelo: {result.stderr}"}
+
+        _audit("ollama_settings_set", user=user, profile=profile)
+        return {"ok": True, "profile": profile,
+                "message": "Configuração do profile salva. Reinicie o expert para aplicar."}
 
     return app
 
@@ -817,6 +844,7 @@ def create_app(secret: Optional[str] = None, token: Optional[str] = None) -> Fas
 def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, foreground: bool = False) -> int:
     """Sobe o dashboard. Por padrão roda em background (não bloqueia o terminal);
     use foreground=True (ou `--foreground`) para bloquear (debug/dev)."""
+    rotate_access_token()
     if foreground:
         return _run_server(host, port)
     return _start_detached(host, port)
@@ -879,20 +907,25 @@ def stop_dashboard() -> bool:
     """Encerra o dashboard em background (via PID file). Retorna True se parou algo."""
     pid_path = _pid_file()
     if not pid_path.exists():
+        discard_access_token()
         return False
     try:
         pid = int(pid_path.read_text(encoding="utf-8").strip())
     except (ValueError, OSError):
         pid_path.unlink(missing_ok=True)
+        discard_access_token()
         return False
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
         pid_path.unlink(missing_ok=True)
+        discard_access_token()
         return False
     except PermissionError:
+        discard_access_token()
         return False
     pid_path.unlink(missing_ok=True)
+    discard_access_token()
     return True
 
 

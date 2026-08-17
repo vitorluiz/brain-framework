@@ -313,7 +313,9 @@ $("check-btn").addEventListener("click", async () => {
 });
 
 function escapeHtml(s) {
-  return String(s).replace(/[&<>\"']/g, (c) => ({'&':'&','<':'<','>':'>','\"':'"',"'":'''}[c]));
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
 }
 
 async function loadStatus() {
@@ -453,7 +455,7 @@ setInterval(() => { if (!$("app-view").classList.contains("hidden")) loadJobs().
 setInterval(() => { if (!$("app-view").classList.contains("hidden")) loadStatus().catch(() => {}); }, 30000);
 </script>
 <footer style="padding:12px 20px;border-top:1px solid #22262f;text-align:center" class="muted">
-  brain-framework v__VERSION__ · dashboard v__VERSION__
+  brain-framework v{{ version }} · dashboard v{{ version }}
 </footer>
 </body>
 </html>

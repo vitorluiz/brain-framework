@@ -48,6 +48,12 @@ pre { background: #0c0e12; padding: 10px; border-radius: 6px; overflow: auto; fo
   <section>
     <h2>Ollama (LLM Local)</h2>
     <div class="card">
+      <h3>Expert</h3>
+      <label for="profile-select">Profile que receberá a configuração</label>
+      <select id="profile-select"><option value="">Carregando profiles…</option></select>
+      <p class="muted">A configuração é gravada no <code>.env</code> e no <code>config.yaml</code> do expert selecionado, nunca no .env do projeto.</p>
+    </div>
+    <div class="card">
       <h3>Status Atual</h3>
       <div class="row">
         <div>
@@ -186,9 +192,24 @@ function renderStatus(data) {
   $("enabled-checkbox").checked = data.enabled || false;
 }
 
+async function loadProfiles() {
+  const data = await api("/api/settings/ollama");
+  const select = $("profile-select");
+  select.innerHTML = "";
+  for (const profile of data.profiles || []) {
+    const option = document.createElement("option");
+    option.value = profile;
+    option.textContent = profile;
+    select.appendChild(option);
+  }
+  if (select.options.length) await loadStatus();
+}
+
 async function loadStatus() {
+  const profile = $("profile-select").value;
+  if (!profile) return;
   try {
-    const data = await api("/api/settings/ollama");
+    const data = await api("/api/settings/ollama?profile=" + encodeURIComponent(profile));
     renderStatus(data);
   } catch (err) {
     console.error(err);
@@ -196,7 +217,7 @@ async function loadStatus() {
   }
 }
 
-$("btn-status").addEventListener("click", loadStatus);
+$("profile-select").addEventListener("change", loadStatus);
 
 $("btn-install").addEventListener("click", async () => {
   showConfigResult("Instalando Ollama…");
@@ -205,6 +226,7 @@ $("btn-install").addEventListener("click", async () => {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
+        profile: $("profile-select").value,
         enabled: "true",
         install_if_missing: "true",
         base_url: $("cfg-base-url").value || "http://localhost:11434",
@@ -225,6 +247,7 @@ $("btn-pull-default").addEventListener("click", async () => {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
+        profile: $("profile-select").value,
         enabled: "true",
         base_url: $("cfg-base-url").value || "http://localhost:11434",
         default_model: "hermes3:3b",
@@ -269,6 +292,7 @@ $("save-pull-btn").addEventListener("click", async () => {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
+        profile: $("profile-select").value,
         enabled: "true",
         base_url: $("cfg-base-url").value,
         default_model: $("cfg-default-model").value,
@@ -282,8 +306,10 @@ $("save-pull-btn").addEventListener("click", async () => {
   }
 });
 
-// Carrega status inicial
-loadStatus();
+$("btn-status").addEventListener("click", loadStatus);
+
+// Carrega profiles e status inicial
+loadProfiles();
 </script>
 </body>
 </html>

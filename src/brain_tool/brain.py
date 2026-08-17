@@ -584,7 +584,54 @@ def _set_fallback_providers(profile_dir: str,
     return _write_config_yaml(profile_dir, config)
 
 
+def _update_profile_env(profile_dir: str, values: Dict[str, str]) -> List[str]:
+    """Atualiza variáveis controladas no .env isolado do profile Hermes.
+
+    O arquivo pode conter credenciais existentes; preserva as demais linhas,
+    remove apenas TERMINAL_CWD legado e garante permissões restritas.
+    """
+    env_path = Path(profile_dir) / ".env"
+    try:
+        lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+        updated = set()
+        output = []
+        for line in lines:
+            stripped = line.lstrip()
+            if stripped.startswith("TERMINAL_CWD="):
+                continue
+            key = line.split("=", 1)[0].strip() if "=" in line else ""
+            if key in values:
+                output.append(f"{key}={values[key]}")
+                updated.add(key)
+            else:
+                output.append(line)
+        for key, value in values.items():
+            if key not in updated:
+                output.append(f"{key}={value}")
+        env_path.write_text("\n".join(output).rstrip() + "\n", encoding="utf-8")
+        os.chmod(env_path, 0o600)
+        return []
+    except OSError as exc:
+        return [f"Erro ao escrever {env_path}: {exc}"]
+
+
+def _read_profile_env(profile_dir: str) -> Dict[str, str]:
+    """Lê apenas as configurações não-secretas do Ollama do .env do profile."""
+    env_path = Path(profile_dir) / ".env"
+    if not env_path.exists():
+        return {}
+    values: Dict[str, str] = {}
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        if "=" not in line or line.lstrip().startswith("#"):
+            continue
+        key, value = line.split("=", 1)
+        if key.strip() in {"BRAIN_OLLAMA_ENABLED", "BRAIN_OLLAMA_BASE_URL", "BRAIN_OLLAMA_DEFAULT_MODEL"}:
+            values[key.strip()] = value.strip()
+    return values
+
+
 # === Comandos do Brain ===
+
 
 def cmd_add_profile(args) -> int:
     """Cria um novo profile no framework."""
@@ -855,6 +902,13 @@ def cmd_model(args) -> int:
     if fallback:
         errors += _set_fallback_providers(
             pdir, [{"provider": fallback_provider, "model": fallback}])
+
+    if not errors and provider == "ollama":
+        errors += _update_profile_env(pdir, {
+            "BRAIN_OLLAMA_ENABLED": "true",
+            "BRAIN_OLLAMA_BASE_URL": base_url or "http://localhost:11434",
+            "BRAIN_OLLAMA_DEFAULT_MODEL": model or "hermes3:3b",
+        })
 
     if errors:
         for e in errors:
@@ -1679,69 +1733,50 @@ def cmd_admin_ollama_pull(args) -> int:
 
 
 def cmd_admin_ollama_enable(args) -> int:
-    """Habilita uso de Ollama no framework (salva config no .env)."""
-    import os
-    from pathlib import Path
-    
-    env_path = Path(".env")
-    if not env_path.exists():
-        print("Arquivo .env não encontrado. Crie a partir do .env.example", file=sys.stderr)
+    """Habilita Ollama no profile Hermes selecionado."""
+    pdir = resolve_hermes_profile_dir(args.profile)
+    if pdir is None:
+        print(f"Profile Hermes '{args.profile}' não encontrado.", file=sys.stderr)
         return 1
-    
-    content = env_path.read_text()
-    lines = content.splitlines()
-    
-    # Atualiza ou adiciona as variáveis
-    vars_to_set = {
+    errors = _update_profile_env(pdir, {
+        "BRAIN_OLLAMA_ENABLED": "true",
         "BRAIN_OLLAMA_BASE_URL": args.base_url,
         "BRAIN_OLLAMA_DEFAULT_MODEL": args.default_model,
-    }
-    
-    updated = set()
-    new_lines = []
-    for line in lines:
-        key = line.split("=")[0].strip() if "=" in line else line.strip()
-        if key in vars_to_set:
-            new_lines.append(f"{key}={vars_to_set[key]}")
-            updated.add(key)
-        else:
-            new_lines.append(line)
-    
-    for key in vars_to_set:
-        if key not in updated:
-            new_lines.append(f"{key}={vars_to_set[key]}")
-    
-    env_path.write_text("\n".join(new_lines) + "\n")
-    print(f"✓ Ollama habilitado: base_url={args.base_url}, default_model={args.default_model}")
-    print("  (requer restart do dashboard/worker para aplicar)")
+    })
+    if not errors:
+        errors += _hermes_config_set(pdir, "model.provider", "ollama")
+        errors += _hermes_config_set(pdir, "model.default", args.default_model)
+        errors += _hermes_config_set(pdir, "model.base_url", args.base_url)
+    if errors:
+        for error in errors:
+            print(f"Erro: {error}", file=sys.stderr)
+        return 1
+    print(f"✓ Ollama habilitado no profile '{args.profile}'")
+    print(f"  base_url: {args.base_url}")
+    print(f"  modelo: {args.default_model}")
     return 0
 
 
 def cmd_admin_ollama_disable(args) -> int:
-    """Desabilita uso de Ollama no framework (comenta variáveis no .env)."""
-    import os
-    from pathlib import Path
-    
-    env_path = Path(".env")
-    if not env_path.exists():
-        print("Arquivo .env não encontrado.", file=sys.stderr)
+    """Desabilita Ollama no profile Hermes selecionado."""
+    pdir = resolve_hermes_profile_dir(args.profile)
+    if pdir is None:
+        print(f"Profile Hermes '{args.profile}' não encontrado.", file=sys.stderr)
         return 1
-    
-    content = env_path.read_text()
-    lines = content.splitlines()
-    
-    new_lines = []
-    for line in lines:
-        key = line.split("=")[0].strip() if "=" in line else line.strip()
-        if key in ("BRAIN_OLLAMA_BASE_URL", "BRAIN_OLLAMA_DEFAULT_MODEL"):
-            new_lines.append(f"# {line}")
-        else:
-            new_lines.append(line)
-    
-    env_path.write_text("\n".join(new_lines) + "\n")
-    print("✓ Ollama desabilitado (variáveis comentadas no .env)")
-    print("  (requer restart do dashboard/worker para aplicar)")
+    errors = _update_profile_env(pdir, {
+        "BRAIN_OLLAMA_ENABLED": "false",
+        "BRAIN_OLLAMA_BASE_URL": args.base_url,
+        "BRAIN_OLLAMA_DEFAULT_MODEL": args.default_model,
+    })
+    if errors:
+        for error in errors:
+            print(f"Erro: {error}", file=sys.stderr)
+        return 1
+    print(f"✓ Ollama desabilitado no profile '{args.profile}'")
     return 0
+
+
+def cmd_init(args) -> int:
     """Inicializa um novo brain.db."""
     db_path = get_brain_db_path(expert=args.name, global_brain=args.global_brain,
                                brain_path=args.brain_path)
@@ -1950,11 +1985,16 @@ def cmd_dashboard_remove_user(args) -> int:
 
 
 def cmd_dashboard_token(args) -> int:
-    """Exibe o token de acesso persistente (para retomar a sessão sem restart)."""
+    """Exibe o token atual ou gera outro com --rotate/-r."""
     dash = _load_dashboard()
     if dash is None:
         return 1
-    print(dash.get_access_token())
+    try:
+        token = dash.rotate_access_token() if getattr(args, "rotate", False) else dash.get_access_token()
+    except RuntimeError as exc:
+        print(f"Erro: {exc}", file=sys.stderr)
+        return 1
+    print(token)
     return 0
 
 
@@ -2019,6 +2059,9 @@ Comandos de Gestão:
   admin add TYPE ID    - Adiciona administrador (whatsapp/cli/grupo)
   admin remove ID      - Remove administrador
   admin role ID ROLE   - Define papel RBAC (admin | approver)
+  admin ollama status  - Verifica Ollama e modelos disponíveis
+  admin ollama enable --profile NAME - Habilita Ollama no expert
+  admin ollama disable --profile NAME - Desabilita Ollama no expert
   dashboard            - Dashboard web (serve/add-user/list-users/remove-user)
 
 Comandos de Conhecimento (via brain_tool):
@@ -2181,12 +2224,16 @@ Para conhecer mais:
     p_admin_ollama_pull.add_argument('model', help='Nome do modelo (ex: hermes3:3b)')
     p_admin_ollama_pull.set_defaults(func=lambda args: cmd_admin_ollama_pull(args))
     
-    p_admin_ollama_enable = p_admin_ollama_sub.add_parser('enable', help='Habilita uso de Ollama no framework')
+    p_admin_ollama_enable = p_admin_ollama_sub.add_parser('enable', help='Habilita uso de Ollama no profile')
+    p_admin_ollama_enable.add_argument('--profile', required=True, help='Nome do profile Hermes')
     p_admin_ollama_enable.add_argument('--base-url', default='http://localhost:11434', help='URL base do Ollama')
     p_admin_ollama_enable.add_argument('--default-model', default='hermes3:3b', help='Modelo padrão')
     p_admin_ollama_enable.set_defaults(func=lambda args: cmd_admin_ollama_enable(args))
     
-    p_admin_ollama_disable = p_admin_ollama_sub.add_parser('disable', help='Desabilita uso de Ollama no framework')
+    p_admin_ollama_disable = p_admin_ollama_sub.add_parser('disable', help='Desabilita Ollama no profile')
+    p_admin_ollama_disable.add_argument('--profile', required=True, help='Nome do profile Hermes')
+    p_admin_ollama_disable.add_argument('--base-url', default='http://localhost:11434', help='URL base do Ollama')
+    p_admin_ollama_disable.add_argument('--default-model', default='hermes3:3b', help='Modelo padrão')
     p_admin_ollama_disable.set_defaults(func=lambda args: cmd_admin_ollama_disable(args))
 
     # --- SOUL.md / brain (LLM) ---
@@ -2214,6 +2261,8 @@ Para conhecer mais:
     p_dash.add_argument('--port', type=int, default=8611, help='Porta (default 8611)')
     p_dash.add_argument('--foreground', action='store_true',
                         help='Roda em primeiro plano (default: background)')
+    p_dash.add_argument('-r', '--rotate', action='store_true',
+                        help='Gera um novo token ao iniciar/consultar o dashboard')
     p_dash_sub = p_dash.add_subparsers(dest='subcommand')
 
     p_dash_serve = p_dash_sub.add_parser('serve', help='Sobe o dashboard web')
@@ -2242,6 +2291,8 @@ Para conhecer mais:
     p_dash_status.set_defaults(func=lambda args: cmd_dashboard_status(args))
 
     p_dash_token = p_dash_sub.add_parser('token', help='Exibe o token de acesso atual')
+    p_dash_token.add_argument('-r', '--rotate', action='store_true', default=argparse.SUPPRESS,
+                              help='Gera um novo token e invalida o anterior')
     p_dash_token.set_defaults(func=lambda args: cmd_dashboard_token(args))
 
     # `brain dashboard` sem subcomando sobe o servidor (defaults aplicados no cmd).

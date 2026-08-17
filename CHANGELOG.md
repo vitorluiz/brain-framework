@@ -26,6 +26,11 @@ e o versionamento segue [SemVer](https://semver.org/lang/pt-BR/).
   subcomandos `stop`/`status`.
 - **Token de acesso LAN** e retomada de sessão por token (`brain dashboard token`).
 - **Learn por URL (SSRF-safe)** — bloqueio de IPs privados/loopback por padrão.
+- **Ollama por profile Hermes** — `/settings` e `brain admin ollama enable --profile`
+  gravam `BRAIN_OLLAMA_*` no `.env` do expert e `model.*` no `config.yaml` do
+  mesmo profile; a configuração não é mais gravada no `.env` do projeto.
+- **Limpeza de configuração legada** — `TERMINAL_CWD` é removido ao atualizar o
+  `.env` de um profile, pois essa configuração pertence ao `config.yaml` do Hermes.
 - **`brain soul` / `brain model`** — gestão de `SOUL.md` e LLM/provider/fallback por
   profile (CLI + edição no dashboard).
 - **`brain restore --from <ts>`** — restaura de backup com confirmação e cópia de

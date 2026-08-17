@@ -277,6 +277,33 @@ def test_get_access_token_returns_persisted():
     assert dashboard.get_access_token() == dashboard._load_or_create_token()
 
 
+def test_rotate_access_token_replaces_persisted_token():
+    previous = dashboard._load_or_create_token()
+    rotated = dashboard.rotate_access_token()
+
+    assert rotated != previous
+    assert dashboard._load_or_create_token() == rotated
+
+
+def test_rotated_token_is_used_by_running_app():
+    previous = dashboard._load_or_create_token()
+    app = dashboard.create_app(secret="test-secret")
+    with TestClient(app) as running_client:
+        assert dashboard.rotate_access_token() != previous
+        assert running_client.post("/login-token", data={"token": previous}).status_code == 401
+        assert running_client.post(
+            "/login-token", data={"token": dashboard.get_access_token()}
+        ).status_code == 200
+
+
+def test_serve_starts_a_new_token_session(monkeypatch):
+    previous = dashboard._load_or_create_token()
+    monkeypatch.setattr(dashboard, "_run_server", lambda host, port: 0)
+
+    assert dashboard.serve(foreground=True) == 0
+    assert dashboard._load_or_create_token() != previous
+
+
 # --- background (detached) ---------------------------------------------------
 
 def test_dashboard_status_not_running():
@@ -285,6 +312,17 @@ def test_dashboard_status_not_running():
 
 def test_stop_dashboard_no_pid():
     assert dashboard.stop_dashboard() is False
+
+
+def test_stop_dashboard_discards_access_token(monkeypatch):
+    dashboard._load_or_create_token()
+    pid_path = dashboard._pid_file()
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_path.write_text("123", encoding="utf-8")
+    monkeypatch.setattr(dashboard.os, "kill", lambda pid, sig: None)
+
+    assert dashboard.stop_dashboard() is True
+    assert not (dashboard.get_brain_root() / ".dashboard_token").exists()
 
 
 
