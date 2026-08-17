@@ -73,9 +73,8 @@ brain recall --expert maria --search "Maria"
 ├── profiles/              # Perfis do Hermes Agent (config.yaml, SOUL.md)
 │   └── <nome>/
 └── brain/                 # Bases de conhecimento (brain.db)
-    ├── experts/           # Brain de cada expert
-    │   └── <nome>/
-    │       └── brain.db
+    ├── <nome>/            # Brain de cada expert (espelha profiles/<nome>/)
+    │   └── brain.db
     ├── global/            # Brain global (compartilhado entre experts)
     │   └── brain.db
     ├── admins.json        # Lista de administradores
@@ -84,7 +83,13 @@ brain recall --expert maria --search "Maria"
 
 O `brain add profile <nome>` cria **ambos**:
 1. Profile em `~/.hermes/profiles/<nome>/`
-2. Brain.db em `~/.hermes/brain/experts/<nome>/brain.db`
+2. Brain.db em `~/.hermes/brain/<nome>/brain.db`
+
+O **Brain** (expert nativo) substitui o agente default do Hermes — o `SOUL.md`
+dele vive em `doc/SOUL.md` e é implantado em `~/.hermes/SOUL.md`. O manual de
+comandos não fica em um AGENTS.md solto: ele vive na própria base global
+(`brain remember --global --tipo reference --title "Comandos brain" ...`),
+consultável via `brain recall --global --search "Comandos"`.
 
 ---
 

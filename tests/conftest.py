@@ -21,5 +21,6 @@ def isolated_storage_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     """
     monkeypatch.setenv("BRAIN_ROOT", str(tmp_path / "brain"))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    for var in ("REDIS_URL", "CELERY_BROKER_URL", "CELERY_RESULT_BACKEND", "DATABASE_URL"):
+    for var in ("REDIS_URL", "CELERY_BROKER_URL", "CELERY_RESULT_BACKEND", "DATABASE_URL",
+                "HERMES_HOME"):
         monkeypatch.delenv(var, raising=False)

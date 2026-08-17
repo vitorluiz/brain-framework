@@ -12,6 +12,8 @@ Uso:
   brain add profile <nome>     - Cria um novo profile
   brain list profiles           - Lista todos os profiles
   brain remove profile <nome>  - Remove um profile
+  brain soul <nome>            - Cria/edita o SOUL.md (persona) do profile
+  brain model <nome> [modelo]  - Define o brain (LLM) do profile
   brain init --name <nome>     - Inicializa um brain.db (via brain_tool)
   brain remember --expert ...  - Adiciona conhecimento (via brain_tool)
   brain recall --expert ...    - Recupera conhecimento
@@ -53,7 +55,7 @@ from brain_tool import (
     get_brain_db_path, get_db_connection, remember, recall, forget,
     synthesize, consolidate, learn, sync, check, list_jobs,
     suggest_taxonomy_rules, capture_taxonomy, count_pages,
-    SCHEMA_VERSION, get_brain_root,
+    SCHEMA_VERSION, get_brain_root, list_expert_names,
 )
 
 # === (fallback sqlite3 legado descontinuado — brain_tool sempre importável) ===
@@ -453,10 +455,120 @@ def save_admins(admins: Dict[str, Any]) -> None:
 
 
 def get_expert_names() -> List[str]:
-    experts_dir = os.path.join(brain_root(), "experts")
-    if not os.path.isdir(experts_dir):
-        return []
-    return sorted([d.name for d in os.scandir(experts_dir) if d.is_dir()])
+    return list_expert_names()
+
+
+def hermes_profiles_root() -> str:
+    """Raiz dos profiles Hermes (onde ficam SOUL.md e config.yaml).
+
+    Profiles vivem em `<hermes_home>/profiles/<nome>`. Se `HERMES_HOME` já
+    aponta para dentro de um profile (`.../profiles/<nome>`), sobe para a
+    pasta `profiles` real.
+    """
+    home = os.path.normpath(os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes")))
+    if os.path.basename(os.path.dirname(home)) == "profiles":
+        return os.path.dirname(home)
+    return os.path.join(home, "profiles")
+
+
+def resolve_hermes_profile_dir(name: str) -> Optional[str]:
+    """Resolve o diretório do profile Hermes para um expert (case-insensitive).
+
+    `hermes profile create` normaliza o nome para lowercase, então o expert
+    `AlentoBot` vive em `~/.hermes/profiles/alentobot/`. Tenta o nome exato e,
+    em seguida, varre a pasta por um match case-insensitive.
+    """
+    if not name or name in (".", "..") or "/" in name or "\\" in name:
+        return None
+    root = hermes_profiles_root()
+    exact = os.path.join(root, name)
+    if os.path.isdir(exact):
+        return exact
+    if os.path.isdir(root):
+        for d in os.scandir(root):
+            if d.is_dir() and d.name.lower() == name.lower():
+                return os.path.join(root, d.name)
+    return None
+
+
+def _run_hermes(profile_dir: str, *args: str,
+                timeout: int = 30) -> subprocess.CompletedProcess:
+    """Roda `hermes ...` apontando para o profile via HERMES_HOME."""
+    env = dict(os.environ)
+    env["HERMES_HOME"] = profile_dir
+    return subprocess.run(["hermes", *args], capture_output=True,
+                          text=True, timeout=timeout, env=env)
+
+
+def _hermes_config_get(profile_dir: str, key: str) -> Optional[str]:
+    """Lê uma chave do config.yaml do profile via `hermes config get`."""
+    result = _run_hermes(profile_dir, "config", "get", key)
+    out = (result.stdout or "").strip()
+    err = (result.stderr or "").strip()
+    if result.returncode != 0 or not out or "not set" in out or "not set" in err:
+        return None
+    return out
+
+
+def _hermes_config_set(profile_dir: str, key: str, value: str) -> List[str]:
+    """Escreve uma chave no config.yaml do profile via `hermes config set`."""
+    result = _run_hermes(profile_dir, "config", "set", key, value)
+    if result.returncode != 0:
+        return [f"hermes config set {key}: {result.stderr.strip()}"]
+    return []
+
+
+def _read_config_yaml(profile_dir: str) -> Dict[str, Any]:
+    """Lê o config.yaml do profile (round-trip seguro, sem subprocess)."""
+    import yaml
+
+    cfg_path = os.path.join(profile_dir, "config.yaml")
+    if not os.path.exists(cfg_path):
+        return {}
+    with open(cfg_path, 'r', encoding='utf-8') as f:
+        return yaml.safe_load(f) or {}
+
+
+def _write_config_yaml(profile_dir: str, config: Dict[str, Any]) -> List[str]:
+    """Escreve o config.yaml com backup prévio e permissões 0600."""
+    import yaml
+
+    cfg_path = os.path.join(profile_dir, "config.yaml")
+    if os.path.exists(cfg_path):
+        try:
+            shutil.copy2(cfg_path, cfg_path + ".bak")
+        except Exception as e:
+            return [f"Erro ao fazer backup de {cfg_path}: {e}"]
+    try:
+        with open(cfg_path, 'w', encoding='utf-8') as f:
+            yaml.safe_dump(config, f, sort_keys=False, allow_unicode=True)
+        os.chmod(cfg_path, 0o600)
+    except Exception as e:
+        return [f"Erro ao escrever {cfg_path}: {e}"]
+    return []
+
+
+def _read_fallback_chain(profile_dir: str) -> List[Dict[str, Any]]:
+    """Lê a cadeia de fallback (`fallback_providers`) do config.yaml."""
+    config = _read_config_yaml(profile_dir)
+    raw = config.get("fallback_providers")
+    if isinstance(raw, list):
+        return [e for e in raw if isinstance(e, dict)]
+    if isinstance(raw, dict):
+        return [raw]
+    return []
+
+
+def _set_fallback_providers(profile_dir: str,
+                            entries: List[Dict[str, Any]]) -> List[str]:
+    """Define a cadeia de fallback (`fallback_providers`) no config.yaml.
+
+    `hermes config set` não grava listas e `hermes fallback add` é interativo,
+    então escrevemos via round-trip YAML seguro (load → modify → dump + .bak).
+    """
+    config = _read_config_yaml(profile_dir)
+    config["fallback_providers"] = entries
+    return _write_config_yaml(profile_dir, config)
 
 
 def is_admin(identifier: str, admins: Optional[Dict[str, Any]] = None) -> bool:
@@ -615,6 +727,143 @@ def cmd_remove_profile(args) -> int:
         print(f"Erro: {e}", file=sys.stderr)
         traceback.print_exc()
         return 1
+
+
+def _write_soul(soul_path: str, content: str) -> None:
+    """Grava o SOUL.md (garante diretório e newline final)."""
+    os.makedirs(os.path.dirname(soul_path), exist_ok=True)
+    if not content.endswith("\n"):
+        content += "\n"
+    with open(soul_path, 'w', encoding='utf-8') as f:
+        f.write(content)
+
+
+def _edit_soul(soul_path: str, name: str) -> int:
+    """Abre o SOUL.md no editor do usuário ($VISUAL/$EDITOR, fallback vi)."""
+    editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vi"
+    if not os.path.exists(soul_path):
+        _write_soul(soul_path, "")
+    result = subprocess.run([editor, soul_path])
+    if result.returncode != 0:
+        print(f"Editor '{editor}' falhou (exit {result.returncode}).", file=sys.stderr)
+        return 1
+    print(f"+ SOUL.md de '{name}' salvo: {soul_path}")
+    return 0
+
+
+def cmd_soul(args) -> int:
+    """Gerencia o SOUL.md (persona) de um profile/expert."""
+    name = args.name
+    if not name:
+        print("Erro: informe o nome do profile. Ex: brain soul maria", file=sys.stderr)
+        return 1
+
+    pdir = resolve_hermes_profile_dir(name)
+    if pdir is None:
+        print(f"Profile Hermes '{name}' nao encontrado em {hermes_profiles_root()}. "
+              f"Crie com: brain add profile {name}", file=sys.stderr)
+        return 1
+
+    soul_path = os.path.join(pdir, "SOUL.md")
+
+    if getattr(args, "file", None):
+        src = args.file
+        if not os.path.exists(src):
+            print(f"Arquivo nao encontrado: {src}", file=sys.stderr)
+            return 1
+        with open(src, 'r', encoding='utf-8') as f:
+            content = f.read()
+        _write_soul(soul_path, content)
+        print(f"+ SOUL.md de '{name}' atualizado a partir de {src}")
+        print(f"  -> {soul_path}")
+        return 0
+
+    if getattr(args, "soul_text", None) is not None:
+        _write_soul(soul_path, args.soul_text)
+        print(f"+ SOUL.md de '{name}' atualizado")
+        print(f"  -> {soul_path}")
+        return 0
+
+    if getattr(args, "edit", False):
+        return _edit_soul(soul_path, name)
+
+    # default: mostra o conteúdo atual
+    if os.path.exists(soul_path):
+        with open(soul_path, 'r', encoding='utf-8') as f:
+            print(f.read())
+    else:
+        print(f"SOUL.md nao encontrado em {soul_path}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _show_model(profile_dir: str, name: str) -> int:
+    model = _hermes_config_get(profile_dir, "model.default")
+    provider = _hermes_config_get(profile_dir, "model.provider")
+    base_url = _hermes_config_get(profile_dir, "model.base_url")
+    chain = _read_fallback_chain(profile_dir)
+    print(f"\nBrain (LLM) de '{name}':")
+    print(f"  modelo:   {model or '(nao definido)'}")
+    print(f"  provider: {provider or '(nao definido)'}")
+    if base_url:
+        print(f"  base_url: {base_url}")
+    if chain:
+        for i, e in enumerate(chain, 1):
+            print(f"  fallback {i}: {e.get('model', '?')} (via {e.get('provider', '?')})")
+    else:
+        print("  fallback: (nenhum)")
+    print("\nDefinir: brain model <nome> <modelo> [--provider P] [--base-url URL] "
+          "[--fallback M --fallback-provider P]")
+    return 0
+
+
+def cmd_model(args) -> int:
+    """Define o brain (LLM) de um profile: model.default + provider + fallback."""
+    name = args.name
+    if not name:
+        print("Erro: informe o nome do profile. Ex: brain model maria hermes3:3b",
+              file=sys.stderr)
+        return 1
+
+    pdir = resolve_hermes_profile_dir(name)
+    if pdir is None:
+        print(f"Profile Hermes '{name}' nao encontrado em {hermes_profiles_root()}. "
+              f"Crie com: brain add profile {name}", file=sys.stderr)
+        return 1
+
+    model = getattr(args, "model", None)
+    provider = getattr(args, "provider", None)
+    base_url = getattr(args, "base_url", None)
+    fallback = getattr(args, "fallback", None)
+    fallback_provider = getattr(args, "fallback_provider", None)
+
+    if not model and not provider and not base_url and not fallback and not fallback_provider:
+        return _show_model(pdir, name)
+
+    if bool(fallback) != bool(fallback_provider):
+        print("Erro: --fallback e --fallback-provider devem ser usados juntos.",
+              file=sys.stderr)
+        return 1
+
+    errors: List[str] = []
+    if model:
+        errors += _hermes_config_set(pdir, "model.default", model)
+    if provider:
+        errors += _hermes_config_set(pdir, "model.provider", provider)
+    if base_url:
+        errors += _hermes_config_set(pdir, "model.base_url", base_url)
+    if fallback:
+        errors += _set_fallback_providers(
+            pdir, [{"provider": fallback_provider, "model": fallback}])
+
+    if errors:
+        for e in errors:
+            print(f"  - {e}", file=sys.stderr)
+        return 1
+
+    print(f"+ Brain (LLM) de '{name}' configurado")
+    _show_model(pdir, name)
+    return 0
 
 
 def cmd_global_learn(args) -> int:
@@ -1086,6 +1335,8 @@ Comandos de Gestão:
   add profile NAME     - Cria um novo profile (hermes profile create + brain.db + alias)
   list profiles        - Lista todos os profiles configurados
   remove profile NAME  - Remove um profile e seu brain.db
+  soul NAME            - Cria/edita o SOUL.md (persona) do profile
+  model NAME [MODEL]   - Define o brain (LLM) do profile (--fallback para failover)
   global learn         - Aprende conhecimento para o brain global
   backup               - Backup de todos os brains (global + experts)
   update               - Atualiza o framework via git pull origin main
@@ -1175,6 +1426,24 @@ Para conhecer mais:
     p_admin_remove = p_admin_sub.add_parser('remove', help='Remove administrador')
     p_admin_remove.add_argument('identifier', help='Identificador')
     p_admin_remove.set_defaults(func=lambda args: cmd_admin_remove(args))
+
+    # --- SOUL.md / brain (LLM) ---
+    p_soul = sp.add_parser('soul', help='Gerencia o SOUL.md (persona) de um profile')
+    p_soul.add_argument('name', help='Nome do profile/expert')
+    p_soul.add_argument('--set', dest='soul_text', help='Define o conteudo do SOUL.md (texto)')
+    p_soul.add_argument('--file', help='Define o SOUL.md a partir de um arquivo')
+    p_soul.add_argument('--edit', action='store_true', help='Abre o SOUL.md no editor ($EDITOR)')
+    p_soul.set_defaults(func=lambda args: cmd_soul(args))
+
+    p_model = sp.add_parser('model', help='Define o brain (LLM) de um profile')
+    p_model.add_argument('name', help='Nome do profile/expert')
+    p_model.add_argument('model', nargs='?', help='Modelo (ex: gpt-5.6-sol, hermes3:3b)')
+    p_model.add_argument('--provider', help='Provider (ex: openai-codex, ollama)')
+    p_model.add_argument('--base-url', dest='base_url', help='Base URL do provider (opcional)')
+    p_model.add_argument('--fallback', help='Modelo de fallback (ex: deepseek-v4-pro)')
+    p_model.add_argument('--fallback-provider', dest='fallback_provider',
+                         help='Provider do fallback (ex: opencode-go)')
+    p_model.set_defaults(func=lambda args: cmd_model(args))
 
     # --- Dashboard web ---
     p_dash = sp.add_parser('dashboard', help='Dashboard web do Brain (spec §6.3)')

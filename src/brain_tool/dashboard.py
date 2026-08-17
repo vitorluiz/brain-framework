@@ -41,7 +41,15 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Upload
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from .brain_tool import check, count_pages, learn, list_jobs
-from .db import get_brain_root, get_session, validate_expert_identifier
+from .db import get_brain_root, get_session, list_expert_names, validate_expert_identifier
+from .brain import (
+    resolve_hermes_profile_dir,
+    _hermes_config_get,
+    _hermes_config_set,
+    _read_fallback_chain,
+    _set_fallback_providers,
+    _write_soul,
+)
 
 __all__ = [
     "add_dashboard_user", "list_dashboard_users", "remove_dashboard_user",
@@ -355,16 +363,28 @@ def _docker_status() -> dict:
 # --- Helpers de domínio -----------------------------------------------------
 
 def _expert_names() -> List[str]:
-    experts_dir = get_brain_root() / "experts"
-    if not experts_dir.is_dir():
-        return []
-    return sorted(d.name for d in experts_dir.iterdir() if d.is_dir())
+    return list_expert_names()
 
 
 def _uploads_dir() -> Path:
     d = get_brain_root() / ".uploads"
     d.mkdir(parents=True, exist_ok=True, mode=0o700)
     return d
+
+
+def _require_profile(name: str) -> str:
+    """Resolve o diretório do profile Hermes para um expert (404 se não existe).
+
+    Delega a `resolve_hermes_profile_dir`, que já bloqueia path traversal
+    (rejeita barra, barra invertida, "." e "..") e só retorna diretórios
+    reais sob a pasta de profiles do Hermes.
+    """
+    pdir = resolve_hermes_profile_dir(name)
+    if pdir is None:
+        raise HTTPException(
+            status_code=404, detail=f"profile Hermes '{name}' nao encontrado"
+        )
+    return pdir
 
 
 # --- App --------------------------------------------------------------------
@@ -572,6 +592,91 @@ def create_app(secret: Optional[str] = None, token: Optional[str] = None) -> Fas
             "docker": _docker_status(),
         }
 
+    # --- Profiles: SOUL.md (persona) + brain (LLM) --------------------------
+
+    @app.get("/api/profiles")
+    def api_profiles(user: str = Depends(current_user)):
+        profiles = []
+        for name in _expert_names():
+            pdir = resolve_hermes_profile_dir(name)
+            profiles.append({
+                "name": name,
+                "hermes_profile": os.path.basename(pdir) if pdir else None,
+                "has_soul": bool(pdir and (Path(pdir) / "SOUL.md").exists()),
+            })
+        return {"profiles": profiles}
+
+    @app.get("/api/profiles/{name}/soul")
+    def api_get_soul(name: str, user: str = Depends(current_user)):
+        pdir = _require_profile(name)
+        soul_path = Path(pdir) / "SOUL.md"
+        content = soul_path.read_text(encoding="utf-8") if soul_path.exists() else ""
+        return {"name": name, "soul": content}
+
+    @app.post("/api/profiles/{name}/soul")
+    async def api_set_soul(
+        name: str,
+        content: str = Form(...),
+        _origin: None = Depends(same_origin),
+        user: str = Depends(current_user),
+    ):
+        pdir = _require_profile(name)
+        _write_soul(str(Path(pdir) / "SOUL.md"), content)
+        _audit("soul_set", user=user, profile=name)
+        return {"ok": True, "name": name}
+
+    @app.get("/api/profiles/{name}/model")
+    def api_get_model(name: str, user: str = Depends(current_user)):
+        pdir = _require_profile(name)
+        return {
+            "name": name,
+            "model": _hermes_config_get(pdir, "model.default"),
+            "provider": _hermes_config_get(pdir, "model.provider"),
+            "base_url": _hermes_config_get(pdir, "model.base_url"),
+            "fallback": _read_fallback_chain(pdir),
+        }
+
+    @app.post("/api/profiles/{name}/model")
+    async def api_set_model(
+        name: str,
+        model: str = Form(""),
+        provider: str = Form(""),
+        base_url: str = Form(""),
+        fallback_model: str = Form(""),
+        fallback_provider: str = Form(""),
+        _origin: None = Depends(same_origin),
+        user: str = Depends(current_user),
+    ):
+        pdir = _require_profile(name)
+        model = (model or "").strip()
+        provider = (provider or "").strip()
+        base_url = (base_url or "").strip()
+        fallback_model = (fallback_model or "").strip()
+        fallback_provider = (fallback_provider or "").strip()
+
+        if bool(fallback_model) != bool(fallback_provider):
+            raise HTTPException(
+                status_code=400, detail="fallback model e provider devem vir juntos"
+            )
+
+        errors: List[str] = []
+        if model:
+            errors += _hermes_config_set(pdir, "model.default", model)
+        if provider:
+            errors += _hermes_config_set(pdir, "model.provider", provider)
+        if base_url:
+            errors += _hermes_config_set(pdir, "model.base_url", base_url)
+        if fallback_model:
+            errors += _set_fallback_providers(
+                pdir, [{"provider": fallback_provider, "model": fallback_model}]
+            )
+
+        if errors:
+            raise HTTPException(status_code=500, detail="; ".join(errors))
+
+        _audit("model_set", user=user, profile=name)
+        return {"ok": True, "name": name}
+
     return app
 
 
@@ -701,8 +806,9 @@ body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-
        background: #0f1115; color: #e6e8eb; }
 #login-view { max-width: 360px; margin: 12vh auto 0; padding: 24px; }
 #login-view h1 { font-size: 1.4rem; margin: 0 0 16px; }
-input, select, button { font-size: 0.95rem; padding: 8px 10px; border-radius: 6px;
+input, select, button, textarea { font-size: 0.95rem; padding: 8px 10px; border-radius: 6px;
        border: 1px solid #2a2e37; background: #181b22; color: #e6e8eb; width: 100%; }
+textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; resize: vertical; }
 button { cursor: pointer; background: #2f6feb; border-color: #2f6feb; font-weight: 600; }
 button:hover { background: #3b7cff; }
 button.secondary { background: #22262f; border-color: #2a2e37; }
@@ -818,6 +924,52 @@ pre { background: #0c0e12; padding: 10px; border-radius: 6px; overflow: auto;
         <span class="muted" id="status-meta"></span>
       </div>
       <div id="status-box"><span class="muted">Carregando…</span></div>
+    </section>
+
+    <section>
+      <h2>Profiles — SOUL.md + Brain (LLM)</h2>
+      <div class="row">
+        <div>
+          <label>Profile / Expert</label>
+          <select id="profile-select"></select>
+        </div>
+        <div>
+          <button class="secondary" id="refresh-profile" style="width:auto">Recarregar</button>
+        </div>
+      </div>
+      <p id="profile-hint" class="muted hidden"></p>
+      <label>SOUL.md (persona)</label>
+      <textarea id="soul-editor" rows="9" placeholder="You are ... (persona do expert)"></textarea>
+      <button id="save-soul" style="margin-top:8px">Salvar SOUL.md</button>
+      <hr style="margin:16px 0;border-color:#22262f">
+      <label>Brain (LLM) — modelo padrão</label>
+      <div class="row">
+        <div>
+          <label>Modelo</label>
+          <input id="model-input" placeholder="hermes3:3b">
+        </div>
+        <div>
+          <label>Provider</label>
+          <input id="provider-input" placeholder="ollama">
+        </div>
+      </div>
+      <div>
+        <label>Base URL (opcional)</label>
+        <input id="base-url-input" placeholder="https://...">
+      </div>
+      <label style="margin-top:10px">Fallback (usado quando o principal falha)</label>
+      <div class="row">
+        <div>
+          <label>Modelo fallback</label>
+          <input id="fallback-model-input" placeholder="deepseek-v4-pro">
+        </div>
+        <div>
+          <label>Provider fallback</label>
+          <input id="fallback-provider-input" placeholder="opencode-go">
+        </div>
+      </div>
+      <button id="save-model" style="margin-top:12px">Salvar Brain (LLM)</button>
+      <pre id="profile-result" class="hidden"></pre>
     </section>
   </main>
 </div>
@@ -976,12 +1128,96 @@ async function loadStatus() {
 
 $("refresh-status").addEventListener("click", loadStatus);
 
+// --- Profiles: SOUL.md + Brain (LLM) ---
+
+function showProfileResult(msg) {
+  const el = $("profile-result");
+  el.classList.remove("hidden");
+  el.textContent = msg;
+}
+
+async function loadProfiles() {
+  const data = await api("/api/profiles");
+  const sel = $("profile-select");
+  sel.innerHTML = "";
+  for (const p of data.profiles) {
+    const o = document.createElement("option");
+    o.value = p.name;
+    o.dataset.hermes = p.hermes_profile || "";
+    o.textContent = p.hermes_profile
+      ? `${p.name}  (hermes: ${p.hermes_profile})`
+      : `${p.name}  (sem profile hermes)`;
+    sel.appendChild(o);
+  }
+  if (data.profiles.length) await loadProfileConfig();
+}
+
+async function loadProfileConfig() {
+  const name = $("profile-select").value;
+  if (!name) return;
+  const opt = $("profile-select").selectedOptions[0];
+  const hasHermes = !!(opt && opt.dataset.hermes);
+  $("profile-hint").textContent = hasHermes
+    ? ""
+    : "Sem profile Hermes — crie com `brain add profile <nome>`.";
+  $("profile-hint").classList.toggle("hidden", hasHermes);
+  try {
+    const [soul, model] = await Promise.all([
+      api(`/api/profiles/${encodeURIComponent(name)}/soul`),
+      api(`/api/profiles/${encodeURIComponent(name)}/model`),
+    ]);
+    $("soul-editor").value = soul.soul || "";
+    $("model-input").value = model.model || "";
+    $("provider-input").value = model.provider || "";
+    $("base-url-input").value = model.base_url || "";
+    const fb = (model.fallback || [])[0] || {};
+    $("fallback-model-input").value = fb.model || "";
+    $("fallback-provider-input").value = fb.provider || "";
+    $("profile-result").classList.add("hidden");
+  } catch (err) {
+    showProfileResult("Erro: " + err.message);
+  }
+}
+
+$("profile-select").addEventListener("change", loadProfileConfig);
+$("refresh-profile").addEventListener("click", loadProfileConfig);
+
+$("save-soul").addEventListener("click", async () => {
+  const name = $("profile-select").value;
+  if (!name) return;
+  const fd = new FormData();
+  fd.append("content", $("soul-editor").value);
+  showProfileResult("Salvando SOUL.md…");
+  try {
+    await api(`/api/profiles/${encodeURIComponent(name)}/soul`, { method: "POST", body: fd });
+    showProfileResult("SOUL.md salvo ✓");
+  } catch (err) { showProfileResult("Erro: " + err.message); }
+});
+
+$("save-model").addEventListener("click", async () => {
+  const name = $("profile-select").value;
+  if (!name) return;
+  const fd = new FormData();
+  fd.append("model", $("model-input").value.trim());
+  fd.append("provider", $("provider-input").value.trim());
+  fd.append("base_url", $("base-url-input").value.trim());
+  fd.append("fallback_model", $("fallback-model-input").value.trim());
+  fd.append("fallback_provider", $("fallback-provider-input").value.trim());
+  showProfileResult("Salvando Brain (LLM)…");
+  try {
+    await api(`/api/profiles/${encodeURIComponent(name)}/model`, { method: "POST", body: fd });
+    showProfileResult("Brain (LLM) salvo ✓");
+    await loadProfileConfig();
+  } catch (err) { showProfileResult("Erro: " + err.message); }
+});
+
 async function boot() {
   try {
     const me = await api("/api/me");
     $("who").textContent = "logado como " + me.user;
     showApp();
     await loadExperts();
+    await loadProfiles();
     await loadJobs();
     await loadStatus();
   } catch (err) { showLogin(); }

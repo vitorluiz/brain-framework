@@ -20,14 +20,15 @@ def test_admin_list_and_group_helpers():
     assert manager.is_group_member("wa:+5511999999999", "outro", admins) is False
 
 
-def test_get_expert_names_scans_experts_dir(tmp_path: Path, monkeypatch):
+def test_get_expert_names_scans_root_ignoring_reserved(tmp_path: Path, monkeypatch):
     root = tmp_path / "brain"
     monkeypatch.setenv("BRAIN_ROOT", str(root))
 
-    (root / "experts" / "maria").mkdir(parents=True)
-    (root / "experts" / "jose").mkdir(parents=True)
-    (root / "global").mkdir(parents=True)  # não deve aparecer como expert
-    (root / "backups").mkdir(parents=True)  # não deve aparecer como expert
+    (root / "maria").mkdir(parents=True)
+    (root / "jose").mkdir(parents=True)
+    (root / "global").mkdir(parents=True)    # reservado — não aparece
+    (root / "backups").mkdir(parents=True)   # reservado — não aparece
+    (root / ".uploads").mkdir(parents=True)  # dotfile — não aparece
 
     assert manager.get_expert_names() == ["jose", "maria"]
 
