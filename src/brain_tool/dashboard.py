@@ -680,6 +680,13 @@ def create_app(secret: Optional[str] = None, token: Optional[str] = None) -> Fas
         _audit("model_set", user=user, profile=name)
         return {"ok": True, "name": name}
 
+    @app.get("/api/ollama/models")
+    async def api_ollama_models(base_url: str = "http://localhost:11434", user: str = Depends(current_user)):
+        """Lista modelos disponíveis no Ollama local."""
+        from brain_tool.brain import _ollama_list_models
+        models = _ollama_list_models(base_url)
+        return {"models": models, "base_url": base_url}
+
     return app
 
 
@@ -949,7 +956,8 @@ pre { background: #0c0e12; padding: 10px; border-radius: 6px; overflow: auto;
       <div class="row">
         <div>
           <label>Modelo</label>
-          <input id="model-input" placeholder="hermes3:3b">
+          <input id="model-input" placeholder="hermes3:3b" list="ollama-models">
+          <datalist id="ollama-models"></datalist>
         </div>
         <div>
           <label>Provider</label>
@@ -958,7 +966,7 @@ pre { background: #0c0e12; padding: 10px; border-radius: 6px; overflow: auto;
       </div>
       <div>
         <label>Base URL (opcional)</label>
-        <input id="base-url-input" placeholder="https://...">
+        <input id="base-url-input" placeholder="http://localhost:11434">
       </div>
       <label style="margin-top:10px">Fallback (usado quando o principal falha)</label>
       <div class="row">
@@ -1197,6 +1205,8 @@ $("save-soul").addEventListener("click", async () => {
   } catch (err) { showProfileResult("Erro: " + err.message); }
 });
 
+$("base-url-input").addEventListener("input", loadOllamaModels);
+
 $("save-model").addEventListener("click", async () => {
   const name = $("profile-select").value;
   if (!name) return;
@@ -1214,6 +1224,22 @@ $("save-model").addEventListener("click", async () => {
   } catch (err) { showProfileResult("Erro: " + err.message); }
 });
 
+async function loadOllamaModels() {
+  const baseUrl = $("base-url-input").value.trim() || "http://localhost:11434";
+  try {
+    const data = await api(`/api/ollama/models?base_url=${encodeURIComponent(baseUrl)}`);
+    const datalist = $("ollama-models");
+    datalist.innerHTML = "";
+    for (const m of data.models || []) {
+      const opt = document.createElement("option");
+      opt.value = m;
+      datalist.appendChild(opt);
+    }
+  } catch (err) {
+    // silencioso - datalist vazio
+  }
+}
+
 async function boot() {
   try {
     const me = await api("/api/me");
@@ -1223,6 +1249,7 @@ async function boot() {
     await loadProfiles();
     await loadJobs();
     await loadStatus();
+    await loadOllamaModels();
   } catch (err) { showLogin(); }
 }
 

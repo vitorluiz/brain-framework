@@ -509,6 +509,20 @@ def _hermes_config_get(profile_dir: str, key: str) -> Optional[str]:
     return out
 
 
+def _ollama_list_models(base_url: str = "http://localhost:11434") -> List[str]:
+    """Lista modelos disponíveis no Ollama local."""
+    import urllib.request
+    import json
+    try:
+        url = base_url.rstrip("/") + "/api/tags"
+        req = urllib.request.Request(url, headers={"User-Agent": "brain-framework"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.load(resp)
+            return [m["name"] for m in data.get("models", [])]
+    except Exception:
+        return []
+
+
 def _hermes_config_set(profile_dir: str, key: str, value: str) -> List[str]:
     """Escreve uma chave no config.yaml do profile via `hermes config set`."""
     result = _run_hermes(profile_dir, "config", "set", key, value)
