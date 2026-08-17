@@ -44,6 +44,8 @@ e o versionamento segue [SemVer](https://semver.org/lang/pt-BR/).
   papéis (`admin`/`approver` via `brain admin role`), `--actor` em
   approve/merge/rollback/promote e `audit_events` encadeado (hash-linked) em
   todos os caminhos de mutação (promote/merge/approve/consolidate).
+- **Teste de integração real** (Celery + Redis via Docker) — `BRAIN_INTEGRATION=1`,
+  fluxo async ponta a ponta (prova com broker de verdade, não mock).
 
 ### Alterado
 
@@ -54,6 +56,9 @@ e o versionamento segue [SemVer](https://semver.org/lang/pt-BR/).
 - **Versão do pacote = 1.0.0** (pré-lançamento; sem bump até release oficial).
 - **SOUL.md do Brain** — fonte canônica em `doc/SOUL.md`, implantado em `~/.hermes/SOUL.md`.
 - **Backup consistente** — snapshot via SQLite backup API (captura transações em WAL).
+- **Worker assíncrono propõe candidato (quarentena)** — fluxo async alinhado ao
+  sync: o worker não publica mais direto; cria o commit candidato e só publica
+  com `--sync` (aprovação implícita).
 
 ### Corrigido
 
@@ -81,6 +86,14 @@ e o versionamento segue [SemVer](https://semver.org/lang/pt-BR/).
 - **Dupla aprovação** para promoção entre scopes (2 admins distintos) e **RBAC**
   por papéis: `approver` só aprova/rejeita; `admin` escreve no conhecimento
   (escritas exigem papel `admin`).
+- **Mensagem Celery sem credenciais**: transporta só `(job_id, scope, path,
+  sync_immediately)` — nunca `database_url` (o worker reconstrói a conexão do
+  próprio ambiente).
+- **Celery/Redis hardening**: `acks_late` + `reject_on_worker_lost`, retry com
+  backoff (`autoretry_for=OperationalError`, `max_retries=3`), `time_limit`/
+  `soft_time_limit` e idempotência (job já concluído não reprocessa).
+- **docker-compose seguro**: sem senha padrão (`POSTGRES_PASSWORD` obrigatório),
+  portas Redis/Postgres **não expostas** por padrão e worker **não-root**.
 
 ### Removido
 

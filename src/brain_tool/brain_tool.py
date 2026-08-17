@@ -502,6 +502,38 @@ def _async_enabled() -> bool:
         return False
 
 
+def _propose_learn_candidate(conn, expert, path, job_id, sync_immediately=False,
+                             actor=None) -> dict:
+    """Ingere e propõe um commit **candidato** (quarentena) — não publica.
+
+    Compartilhado pelo caminho síncrono (`learn`) e pelo worker Celery: ambos
+    ingerem, criam a branch candidata e só publicam se `sync_immediately`
+    (aprovação implícita do admin local). Mantém a trilha de checkpoints
+    assinados (Fase 3) também no fluxo assíncrono.
+    """
+    result = _ingest(conn, expert, path, sync_immediately=False)
+    changes = result.get("changes") or []
+    scan = result.get("scan") or {}
+    checkpoints.ensure_genesis(conn, expert)
+    scope = checkpoints.scope_for(expert)
+    author = actor or "cli:local"
+    candidate = checkpoints.create_commit(
+        conn, scope, changes, author=author,
+        policy="implicit-admin", ref_name=checkpoints.candidate_ref(job_id),
+        validation_results={"scan": scan, "source": str(path)},
+    )
+    conn.commit()
+    result["job_id"] = job_id
+    result["status"] = "proposed"
+    result["candidate_ref"] = f"{scope}/{checkpoints.candidate_ref(job_id)}"
+    result["candidate_commit"] = candidate
+    if sync_immediately:
+        merge = checkpoints.merge_candidate(conn, scope, job_id, author)
+        result["merge"] = merge
+        result["status"] = "synced" if merge.get("ok") else "merge_conflict"
+    return result
+
+
 def learn(conn, expert, file_path, sync_immediately=False, dry_run=False, actor=None):
     """Ingere arquivo/diretório/URL no staging (spec §4.2).
 
@@ -528,8 +560,11 @@ def learn(conn, expert, file_path, sync_immediately=False, dry_run=False, actor=
                                     "mode": "async"})
         from brain_tool.worker import learn_task
 
-        database_url = str(conn.get_bind().url)
-        learn_task.delay(job_id, expert, file_path, sync_immediately, database_url)
+        # A mensagem carrega só `(job_id, scope, path, sync_immediately)` —
+        # nunca `database_url` (credencial fora do Redis; o worker reconstrói
+        # a conexão do próprio ambiente).
+        scope = checkpoints.scope_for(expert)
+        learn_task.delay(job_id, scope, file_path, sync_immediately)
         return {"action": "learn", "expert": expert, "path": file_path,
                 "status": "enqueued", "job_id": job_id, "mode": "async"}
 
@@ -537,26 +572,8 @@ def learn(conn, expert, file_path, sync_immediately=False, dry_run=False, actor=
                       metadata={"path": file_path, "sync": sync_immediately, "mode": "sync"})
     _set_job_status(conn, job_id, "processing")
     try:
-        result = _ingest(conn, expert, file_path, sync_immediately=False)
-        changes = result.get("changes") or []
-        scan = result.get("scan") or {}
-        checkpoints.ensure_genesis(conn, expert)
-        scope = checkpoints.scope_for(expert)
-        author = actor or "cli:local"
-        candidate = checkpoints.create_commit(
-            conn, scope, changes, author=author,
-            policy="implicit-admin", ref_name=checkpoints.candidate_ref(job_id),
-            validation_results={"scan": scan, "source": file_path},
-        )
-        conn.commit()
-        result["job_id"] = job_id
-        result["status"] = "proposed"
-        result["candidate_ref"] = f"{scope}/{checkpoints.candidate_ref(job_id)}"
-        result["candidate_commit"] = candidate
-        if sync_immediately:
-            merge = checkpoints.merge_candidate(conn, scope, job_id, author)
-            result["merge"] = merge
-            result["status"] = "synced" if merge.get("ok") else "merge_conflict"
+        result = _propose_learn_candidate(conn, expert, file_path, job_id,
+                                          sync_immediately, actor)
     except Exception as e:
         _set_job_status(conn, job_id, "failed", error=str(e))
         raise
