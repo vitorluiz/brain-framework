@@ -1258,7 +1258,7 @@ setInterval(() => { if (!$("app-view").classList.contains("hidden")) loadJobs().
 setInterval(() => { if (!$("app-view").classList.contains("hidden")) loadStatus().catch(() => {}); }, 30000);
 </script>
 <footer style="padding:12px 20px;border-top:1px solid #22262f;text-align:center" class="muted">
-  brain-framework __VERSION__
+  brain-framework v__VERSION__ · dashboard v__VERSION__
 </footer>
 </body>
 </html>
