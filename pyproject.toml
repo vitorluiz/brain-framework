@@ -36,3 +36,6 @@ include = ["brain_tool*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "integration: teste de integração real (Redis + worker via Docker; requer BRAIN_INTEGRATION=1)",
+]

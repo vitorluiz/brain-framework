@@ -302,8 +302,15 @@ brain promote --from expert/maria --to global ...   # propõe promoção (dupla 
 
 ## 10. Integração Celery/Redis (hardening)
 
-- Mensagem transporta **só `(job_id, scope)`** — nunca `database_url`. O worker
-  reconstrói a URL do próprio ambiente (elimina credencial no Redis).
+> Estado: **implementado** (17/08/2026) — mensagem sem `database_url`, worker
+> propõe candidato (não publica), `acks_late`/retry/time-limits, docker-compose
+> seguro + worker não-root, teste de integração real (`BRAIN_INTEGRATION=1`).
+> **Deferido**: referência por `asset_id` em storage compartilhado (auditoria §6.2)
+> e constraint `UNIQUE (expert, hash_canonical, pipeline_version)` (auditoria §6.4).
+
+- Mensagem transporta **só `(job_id, scope, path, sync_immediately)`** — nunca
+  `database_url`. O worker reconstrói a URL do próprio ambiente (elimina
+  credencial no Redis).
 - Worker executa extração → branch candidata → validações; **não publica**
   (publicação = `sync` aprovado).
 - Task com `acks_late=True`, `autoretry_for`, `max_retries`, `time_limit` /
